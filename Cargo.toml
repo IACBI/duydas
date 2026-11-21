@@ -30,7 +30,7 @@ duydas-ui = { path = "crates/duydas-ui" }
 bitflags = "2.9"
 fluent-bundle = "0.16"
 # 0.13 matches fluent-bundle's unic-langid; 0.14 switches to icu_locid 1.x and would duplicate locale types.
-fluent-langneg = "0.13"
+fluent-langneg = "0.14"
 fluent-syntax = "0.12"
 icu_casemap = "2.4"
 icu_datetime = { version = "2.4", default-features = false, features = ["compiled_data"] }
