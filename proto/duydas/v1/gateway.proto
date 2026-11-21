@@ -1,0 +1,12 @@
+// Duydaş gateway protocol, version 1. Phase 0 placeholder; message types land in Phase 1.
+// Compatibility rules: never reuse or renumber a field, prefer adding optional fields,
+// and keep `buf breaking` green against the last release.
+syntax = "proto3";
+
+package duydas.v1;
+
+// First frame a client sends after the WebSocket upgrade.
+message Hello {
+  uint32 protocol_version = 1;
+  string client_version = 2;
+}

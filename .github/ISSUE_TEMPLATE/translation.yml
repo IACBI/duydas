@@ -1,0 +1,26 @@
+name: Translation issue
+description: A string is wrong, awkward, truncated or untranslated.
+labels: ["i18n", "triage"]
+body:
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options: [Türkçe (tr-TR), 日本語 (ja-JP), English (en-US)]
+    validations:
+      required: true
+  - type: input
+    id: key
+    attributes:
+      label: Message id (if known)
+      placeholder: e.g. composer-placeholder
+  - type: textarea
+    id: current
+    attributes:
+      label: Current text and where it appears
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested text

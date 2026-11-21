@@ -1,0 +1,76 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/duydas-core",
+    "crates/duydas-proto",
+    "crates/duydas-i18n",
+    "crates/duydas-client",
+    "crates/duydas-voice",
+    "crates/duydas-ui",
+    "apps/duydas-desktop",
+    "apps/duydas-server",
+    "xtask",
+]
+default-members = ["apps/duydas-desktop"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+authors = ["A.C.B"]
+repository = "https://github.com/IACBI/duydas"
+publish = false
+
+[workspace.dependencies]
+duydas-proto = { path = "crates/duydas-proto" }
+duydas-i18n = { path = "crates/duydas-i18n" }
+duydas-ui = { path = "crates/duydas-ui" }
+
+bitflags = "2.9"
+fluent-bundle = "0.16"
+# 0.13 matches fluent-bundle's unic-langid; 0.14 switches to icu_locid 1.x and would duplicate locale types.
+fluent-langneg = "0.13"
+fluent-syntax = "0.12"
+icu_casemap = "2.4"
+icu_datetime = { version = "2.4", default-features = false, features = ["compiled_data"] }
+icu_decimal = "2.4"
+icu_locale_core = "2.4"
+# `sync` makes ICU4X data payloads Arc-backed so the Localizer is Send + Sync.
+icu_provider = { version = "2.4", features = ["sync"] }
+# Defaults minus `web-colors` (intentionally wrong sRGB blending) and `crisp` (can jitter), plus
+# advanced text shaping for Turkish/Japanese and the tokio executor the client SDK runs on.
+iced = { version = "0.14", default-features = false, features = [
+    "wgpu",
+    "tiny-skia",
+    "x11",
+    "wayland",
+    "linux-theme-detection",
+    "advanced-shaping",
+    "tokio",
+    "advanced",
+] }
+sys-locale = "0.3"
+unic-langid = "0.9"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+print_stdout = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2

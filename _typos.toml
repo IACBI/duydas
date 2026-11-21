@@ -1,0 +1,7 @@
+[files]
+# Translations and generated lockfiles are not English prose.
+extend-exclude = ["locales/", "Cargo.lock", "*.svg"]
+
+[default.extend-words]
+# Turkish product name fragments
+Duyda = "Duyda"

@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+.probe/
+.DS_Store
+.idea/
+.vscode/
+*.pdb
+# Local secrets and signing material must never be committed.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx

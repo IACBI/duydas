@@ -1,0 +1,19 @@
+[package]
+name = "duydas-desktop"
+description = "Duydaş desktop client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+default-run = "duydas-desktop"
+
+[dependencies]
+duydas-i18n.workspace = true
+duydas-ui.workspace = true
+iced.workspace = true
+
+[lints]
+workspace = true

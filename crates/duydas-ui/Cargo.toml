@@ -1,0 +1,16 @@
+[package]
+name = "duydas-ui"
+description = "Duydaş design system: tokens, theme and custom widgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+iced.workspace = true
+
+[lints]
+workspace = true

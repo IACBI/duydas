@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as expected.
+labels: ["bug", "triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open …
+        2. Click …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Duydaş version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      multiple: true
+      options: [Windows, macOS, Linux (Wayland), Linux (X11)]
+    validations:
+      required: true
+  - type: dropdown
+    id: language
+    attributes:
+      label: UI language
+      options: [English, Türkçe, 日本語, Other]
+  - type: input
+    id: ime
+    attributes:
+      label: Input method (if text input is involved)
+      placeholder: e.g. Microsoft IME (Japanese), macOS Japanese Input, fcitx5-mozc
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove any personal data, tokens or message content before pasting.
+      render: text
