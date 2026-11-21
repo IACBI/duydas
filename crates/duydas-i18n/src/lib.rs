@@ -11,7 +11,11 @@
 //!
 //! let l10n = Localizer::new(UiLocale::JaJp);
 //! assert_eq!(l10n.tr(Key::SettingsTitle), "設定");
-//! assert_eq!(l10n.tr_args(Key::MessageCount, &args!(count = 3)), "3 件のメッセージ");
+//! let shown = l10n.format_integer(1234);
+//! assert_eq!(
+//!     l10n.tr_args(Key::MessageCount, &args!(count = 1234, countText = shown)),
+//!     "1,234 件のメッセージ"
+//! );
 //! ```
 
 mod locale;
@@ -21,7 +25,7 @@ pub mod schema;
 
 pub use fluent_bundle::{FluentArgs, FluentValue};
 pub use locale::{UiLocale, detect_system_locale, negotiate};
-pub use localizer::Localizer;
+pub use localizer::{Localizer, validate_shipped_bundles};
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 

@@ -2,7 +2,8 @@
 
 use std::time::Instant;
 
-/// Records process start and reports the first presented frame once.
+/// Records process start and reports the first redraw request once. Iced emits it just before
+/// presenting, so it marks the first frame attempt, not a confirmed present.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Probe {
     started: Instant,
@@ -21,7 +22,7 @@ impl Probe {
         !self.reported
     }
 
-    pub(crate) fn first_frame(&mut self, at: Instant) {
+    pub(crate) fn first_redraw(&mut self, at: Instant) {
         if self.reported {
             return;
         }
@@ -32,7 +33,7 @@ impl Probe {
             reason = "machine-readable marker parsed by xtask perf"
         )]
         {
-            println!("duydas-perf first_frame_ms={ms:.1}");
+            println!("duydas-perf first_redraw_ms={ms:.1}");
         }
     }
 }

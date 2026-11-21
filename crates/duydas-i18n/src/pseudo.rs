@@ -1,19 +1,26 @@
 //! Pseudo-localization: accented, bracketed and ~40% longer text, to expose hardcoded strings,
 //! truncation and layouts that cannot absorb translation expansion.
 
-pub(crate) fn transform(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() * 2);
+use std::borrow::Cow;
+
+/// Fluent transform for pattern text. Interpolated values (user data such as channel names) are
+/// not passed through it, so they stay readable.
+pub(crate) fn accent_text(input: &str) -> Cow<'_, str> {
+    if input.chars().any(|c| accent(c) != c) {
+        Cow::Owned(input.chars().map(accent).collect())
+    } else {
+        Cow::Borrowed(input)
+    }
+}
+
+/// Brackets the finished message and pads it by roughly 40% of its letters.
+pub(crate) fn wrap(text: &str) -> String {
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    let padding = letters.div_ceil(5) * 2;
+    let mut out = String::with_capacity(text.len() + padding * 2 + 2);
     out.push('[');
-    let mut letters = 0usize;
-    for c in input.chars() {
-        if c.is_alphabetic() {
-            letters += 1;
-        }
-        out.push(accent(c));
-    }
-    for _ in 0..letters.div_ceil(5) * 2 {
-        out.push('·');
-    }
+    out.push_str(text);
+    out.extend(std::iter::repeat_n('·', padding));
     out.push(']');
     out
 }
@@ -63,7 +70,7 @@ fn accent(c: char) -> char {
 mod tests {
     #[test]
     fn expands_and_brackets() {
-        let out = super::transform("Settings");
+        let out = super::wrap(&super::accent_text("Settings"));
         assert!(out.starts_with("[Šéţţîñĝš"));
         assert!(out.ends_with(']'));
         assert!(out.chars().count() >= "Settings".len() * 14 / 10);

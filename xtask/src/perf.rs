@@ -1,73 +1,131 @@
 //! Startup and memory measurement for the desktop client (see `docs/performance.md`).
 //!
-//! Measures wall time from spawn to the app's `first_frame` marker, then samples memory after the
+//! Measures wall time from spawn to the app's `first_redraw` marker, then samples memory after the
 //! app has idled. Memory metrics differ per OS and are reported under their native names.
 
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const IDLE_BEFORE_SAMPLE: Duration = Duration::from_millis(2500);
+const MARKER_TIMEOUT: Duration = Duration::from_secs(30);
+const MARKER: &str = "duydas-perf first_redraw_ms=";
+
+/// Kills the child on every exit path, including early returns and panics.
+struct Guard(Child);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
-    let runs: usize = args
-        .windows(2)
-        .find(|w| w[0] == "--runs")
-        .and_then(|w| w[1].parse().ok())
-        .unwrap_or(5);
+    let runs = match args.iter().position(|a| a == "--runs") {
+        Some(i) => args
+            .get(i + 1)
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .ok_or("--runs needs a positive integer")?,
+        None => 5,
+    };
 
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "--release", "-p", "duydas-desktop"])
-        .current_dir(root)
-        .status()
-        .map_err(|e| e.to_string())?;
-    if !status.success() {
-        return Err("release build failed".into());
-    }
-    let exe = root
-        .join("target/release")
-        .join(format!("duydas-desktop{}", std::env::consts::EXE_SUFFIX));
-
-    let mut first_frames = Vec::new();
-    let mut memory = Vec::new();
+    let exe = build_release(root)?;
+    let mut redraws = Vec::with_capacity(runs);
     for run in 1..=runs {
-        let (first_frame, mem) = measure_once(&exe)?;
-        println!("run {run}: spawn→first_frame {first_frame:.1} ms, {mem}");
-        first_frames.push(first_frame);
-        memory.push(mem);
+        let (first_redraw, mem) = measure_once(&exe)?;
+        println!("run {run}: spawn→first_redraw {first_redraw:.1} ms, {mem}");
+        redraws.push(first_redraw);
     }
-    first_frames.sort_by(f64::total_cmp);
-    let p50 = first_frames[first_frames.len() / 2];
-    let max = first_frames.last().copied().unwrap_or_default();
-    println!("spawn→first_frame: p50 {p50:.1} ms, max {max:.1} ms over {runs} warm runs");
+    redraws.sort_by(f64::total_cmp);
+    let p50 = redraws[redraws.len() / 2];
+    let max = redraws[redraws.len() - 1];
+    println!("spawn→first_redraw: p50 {p50:.1} ms, max {max:.1} ms over {runs} runs");
     println!("binary size: {:.1} MB", file_mb(&exe));
     Ok(())
 }
 
-fn measure_once(exe: &Path) -> Result<(f64, String), String> {
-    let spawned = Instant::now();
-    let mut child = Command::new(exe)
-        .env("DUYDAS_PERF", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("spawn {}: {e}", exe.display()))?;
-    let stdout = child.stdout.take().ok_or("no stdout")?;
-    let mut first_frame = None;
-    for line in BufReader::new(stdout).lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.starts_with("duydas-perf first_frame_ms=") {
-            first_frame = Some(spawned.elapsed().as_secs_f64() * 1000.0);
-            break;
+/// Builds the desktop app and returns the executable path Cargo reports, which honors
+/// `CARGO_TARGET_DIR`, `build.target-dir` and target-triple configuration.
+fn build_release(root: &Path) -> Result<PathBuf, String> {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "duydas-desktop",
+            "--message-format=json-render-diagnostics",
+        ])
+        .current_dir(root)
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("release build failed".into());
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains("\"reason\":\"compiler-artifact\""))
+        .filter(|line| line.contains("\"name\":\"duydas-desktop\""))
+        .find_map(|line| json_string_field(line, "executable"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "cargo did not report the duydas-desktop executable".into())
+}
+
+/// Extracts a string field from one line of Cargo's JSON output. Cargo escapes only `\\` and
+/// `"` in paths, which is all this needs to undo.
+fn json_string_field(line: &str, field: &str) -> Option<String> {
+    let key = format!("\"{field}\":\"");
+    let start = line.find(&key)? + key.len();
+    let mut out = String::new();
+    let mut chars = line[start..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => out.push(chars.next()?),
+            other => out.push(other),
         }
     }
+    None
+}
+
+fn measure_once(exe: &Path) -> Result<(f64, String), String> {
+    let spawned = Instant::now();
+    let mut guard = Guard(
+        Command::new(exe)
+            .env("DUYDAS_PERF", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn {}: {e}", exe.display()))?,
+    );
+    let stdout = guard.0.stdout.take().ok_or("no stdout")?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.starts_with(MARKER) {
+                let _ = tx.send(spawned.elapsed());
+                break;
+            }
+        }
+    });
+    let Ok(elapsed) = rx.recv_timeout(MARKER_TIMEOUT) else {
+        let _ = guard.0.kill();
+        let mut stderr = String::new();
+        if let Some(mut pipe) = guard.0.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        return Err(format!(
+            "no first_redraw marker within {MARKER_TIMEOUT:?}; app stderr:\n{stderr}"
+        ));
+    };
     std::thread::sleep(IDLE_BEFORE_SAMPLE);
-    let mem = sample_memory(child.id());
-    let _ = child.kill();
-    let _ = child.wait();
-    let first_frame = first_frame.ok_or("app exited before presenting a frame")?;
-    Ok((first_frame, mem))
+    let mem = sample_memory(guard.0.id());
+    Ok((elapsed.as_secs_f64() * 1000.0, mem))
 }
 
 fn sample_memory(pid: u32) -> String {
@@ -82,11 +140,12 @@ fn sample_memory(pid: u32) -> String {
             .and_then(|s| {
                 s.lines()
                     .find(|l| l.starts_with("Pss:"))
-                    .map(|l| l.split_whitespace().nth(1).unwrap_or("?").to_owned())
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|kb| kb.parse::<f64>().ok())
             })
             .map_or_else(
                 || "memory unavailable".into(),
-                |kb| format!("{:.1} MB PSS", kb.parse::<f64>().unwrap_or(0.0) / 1024.0),
+                |kb| format!("{:.1} MB PSS", kb / 1024.0),
             )
     } else {
         let rss = command_output("ps", &["-o", "rss=", "-p", &pid.to_string()]);
@@ -107,4 +166,22 @@ fn command_output(program: &str, args: &[&str]) -> String {
 
 fn file_mb(path: &Path) -> f64 {
     std::fs::metadata(path).map_or(0.0, |m| m.len() as f64 / 1_048_576.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::json_string_field;
+
+    #[test]
+    fn extracts_escaped_executable_path() {
+        let line = r#"{"reason":"compiler-artifact","executable":"C:\\t\\duydas-desktop.exe","fresh":true}"#;
+        assert_eq!(
+            json_string_field(line, "executable").as_deref(),
+            Some(r"C:\t\duydas-desktop.exe")
+        );
+        assert_eq!(
+            json_string_field(r#"{"executable":null}"#, "executable"),
+            None
+        );
+    }
 }

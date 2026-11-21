@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # fluent-langneg 0.14 switched to icu_locid 1.x and no longer accepts fluent-bundle's
+      # unic-langid identifiers (see the comment in Cargo.toml). Lift this when fluent-bundle moves.
+      - dependency-name: fluent-langneg
+        versions: [">=0.14"]
     groups:
       icu4x:
         patterns: ["icu*"]

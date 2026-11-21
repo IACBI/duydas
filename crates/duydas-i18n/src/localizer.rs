@@ -40,9 +40,10 @@ impl Localizer {
     /// Panics if embedded FTL fails to parse or ICU4X compiled data lacks the locale. Both are
     /// checked by tests and `cargo xtask i18n-check`, so a release build cannot hit them.
     pub fn new(ui_locale: UiLocale) -> Self {
-        let bundle = build_bundle(ui_locale);
-        let fallback = (ui_locale.resource_tag() != UiLocale::FALLBACK.tag())
-            .then(|| build_bundle(UiLocale::FALLBACK));
+        let bundle = build_bundle(ui_locale).unwrap_or_else(|errors| panic!("{errors:?}"));
+        let fallback = (ui_locale.resource_tag() != UiLocale::FALLBACK.tag()).then(|| {
+            build_bundle(UiLocale::FALLBACK).unwrap_or_else(|errors| panic!("{errors:?}"))
+        });
         let icu_locale = Locale::try_from_str(ui_locale.resource_tag())
             .unwrap_or_else(|_| unreachable!("static tags are valid"));
         let decimal = DecimalFormatter::try_new(icu_locale.clone().into(), Default::default())
@@ -110,54 +111,91 @@ impl Localizer {
             .into_owned()
     }
 
-    /// Keys missing from the active locale (they render from the fallback instead).
+    /// Keys whose value is missing from the active locale (they render from the fallback).
     pub fn missing_keys(&self) -> Vec<Key> {
         Key::ALL
             .iter()
             .copied()
-            .filter(|key| !self.bundle.has_message(key.id()))
+            .filter(|key| !has_value(&self.bundle, key.id()))
             .collect()
     }
 
     fn format(&self, key: Key, args: Option<&FluentArgs<'_>>) -> String {
-        let bundle = if self.bundle.has_message(key.id()) {
-            &self.bundle
-        } else if let Some(fallback) = &self.fallback {
-            fallback
-        } else {
-            return key.id().to_owned();
-        };
-        let Some(pattern) = bundle.get_message(key.id()).and_then(|m| m.value()) else {
-            return key.id().to_owned();
-        };
-        let mut errors = Vec::new();
-        let text = bundle
-            .format_pattern(pattern, args, &mut errors)
-            .into_owned();
-        debug_assert!(errors.is_empty(), "formatting {}: {errors:?}", key.id());
+        let text = format_value(&self.bundle, key, args)
+            .or_else(|| {
+                self.fallback
+                    .as_ref()
+                    .and_then(|f| format_value(f, key, args))
+            })
+            .unwrap_or_else(|| key.id().to_owned());
         if self.ui_locale == UiLocale::Pseudo {
-            pseudo::transform(&text)
+            pseudo::wrap(&text)
         } else {
             text
         }
     }
 }
 
-fn build_bundle(locale: UiLocale) -> Bundle {
+fn has_value(bundle: &Bundle, id: &str) -> bool {
+    bundle.get_message(id).is_some_and(|m| m.value().is_some())
+}
+
+/// Formats `key`'s value, or `None` if the bundle lacks it or resolution reported errors, so the
+/// caller can fall back to the source locale instead of showing partial text.
+fn format_value(bundle: &Bundle, key: Key, args: Option<&FluentArgs<'_>>) -> Option<String> {
+    let pattern = bundle.get_message(key.id())?.value()?;
+    let mut errors = Vec::new();
+    let text = bundle
+        .format_pattern(pattern, args, &mut errors)
+        .into_owned();
+    debug_assert!(errors.is_empty(), "formatting {}: {errors:?}", key.id());
+    errors.is_empty().then_some(text)
+}
+
+/// Builds and validates every shipped locale's bundle without panicking.
+///
+/// # Errors
+/// Returns one message per FTL parse or bundle error.
+pub fn validate_shipped_bundles() -> Result<(), Vec<String>> {
+    let errors: Vec<String> = UiLocale::SHIPPED
+        .iter()
+        .filter_map(|locale| build_bundle(*locale).err())
+        .flatten()
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn build_bundle(locale: UiLocale) -> Result<Bundle, Vec<String>> {
+    let tag = locale.resource_tag();
     let mut bundle = Bundle::new_concurrent(vec![locale.langid()]);
     // Fluent wraps placeables in FSI/PDI marks for bidi safety. No shipped locale is RTL yet, and
     // the marks show up in copied text and grapheme counts; re-enable when an RTL locale lands.
     bundle.set_use_isolating(false);
-    let sources = embedded_sources(locale.resource_tag())
-        .unwrap_or_else(|| panic!("no embedded resources for {}", locale.resource_tag()));
-    for (file, source) in sources {
-        let resource = FluentResource::try_new((*source).to_owned())
-            .unwrap_or_else(|(_, errors)| panic!("{}/{file}: {errors:?}", locale.resource_tag()));
-        bundle
-            .add_resource(resource)
-            .unwrap_or_else(|errors| panic!("{}/{file}: {errors:?}", locale.resource_tag()));
+    if locale == UiLocale::Pseudo {
+        bundle.set_transform(Some(pseudo::accent_text));
     }
-    bundle
+    let sources =
+        embedded_sources(tag).ok_or_else(|| vec![format!("no embedded resources for {tag}")])?;
+    let mut errors = Vec::new();
+    for (file, source) in sources {
+        match FluentResource::try_new((*source).to_owned()) {
+            Ok(resource) => {
+                if let Err(errs) = bundle.add_resource(resource) {
+                    errors.extend(errs.iter().map(|e| format!("{tag}/{file}: {e:?}")));
+                }
+            }
+            Err((_, errs)) => errors.extend(errs.iter().map(|e| format!("{tag}/{file}: {e:?}"))),
+        }
+    }
+    if errors.is_empty() {
+        Ok(bundle)
+    } else {
+        Err(errors)
+    }
 }
 
 #[cfg(test)]
@@ -198,22 +236,19 @@ mod tests {
 
     #[test]
     fn plurals_follow_locale_rules() {
+        let count = |l: &Localizer, n: i64| {
+            l.tr_args(
+                Key::MessageCount,
+                &args!(count = n, countText = l.format_integer(n)),
+            )
+        };
         let en = Localizer::new(UiLocale::EnUs);
-        assert_eq!(
-            en.tr_args(Key::MessageCount, &args!(count = 1)),
-            "1 message"
-        );
-        assert_eq!(
-            en.tr_args(Key::MessageCount, &args!(count = 5)),
-            "5 messages"
-        );
+        assert_eq!(count(&en, 1), "1 message");
+        assert_eq!(count(&en, 1234), "1,234 messages");
         let tr = Localizer::new(UiLocale::TrTr);
-        assert_eq!(tr.tr_args(Key::MessageCount, &args!(count = 5)), "5 mesaj");
+        assert_eq!(count(&tr, 1234), "1.234 mesaj");
         let ja = Localizer::new(UiLocale::JaJp);
-        assert_eq!(
-            ja.tr_args(Key::MessageCount, &args!(count = 1)),
-            "1 件のメッセージ"
-        );
+        assert_eq!(count(&ja, 1), "1 件のメッセージ");
     }
 
     #[test]
@@ -266,6 +301,19 @@ mod tests {
         let text = Localizer::new(UiLocale::Pseudo).tr(Key::SettingsTitle);
         assert!(text.starts_with('[') && text.ends_with(']'));
         assert_ne!(text, Localizer::new(UiLocale::EnUs).tr(Key::SettingsTitle));
+    }
+
+    #[test]
+    fn pseudo_locale_leaves_user_data_readable() {
+        let text = Localizer::new(UiLocale::Pseudo)
+            .tr_args(Key::ComposerPlaceholder, &args!(channel = "general"));
+        assert!(text.contains("#general"), "{text}");
+        assert!(text.contains("Méššåĝé"), "{text}");
+    }
+
+    #[test]
+    fn shipped_bundles_validate() {
+        assert_eq!(validate_shipped_bundles(), Ok(()));
     }
 
     #[test]

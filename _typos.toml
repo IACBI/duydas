@@ -1,7 +1,7 @@
 [files]
-# Translations and generated lockfiles are not English prose.
+# Translations and lockfiles are not English prose.
 extend-exclude = ["locales/", "Cargo.lock", "*.svg"]
 
 [default.extend-words]
-# Turkish product name fragments
-Duyda = "Duyda"
+# Turkish words in the README's Türkçe section that resemble English typos.
+sistem = "sistem"

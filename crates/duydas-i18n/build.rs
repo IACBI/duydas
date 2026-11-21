@@ -75,13 +75,10 @@ fn main() {
     for (locale, files) in &locales {
         writeln!(out, "    ({locale:?}, &[").unwrap();
         for (file, path) in files {
-            let abs = fs::canonicalize(path).expect("canonicalize");
-            writeln!(
-                out,
-                "        ({file:?}, include_str!({:?})),",
-                abs.display().to_string()
-            )
-            .unwrap();
+            // Embedding the text itself (a Debug-escaped literal) keeps the generated code free of
+            // machine-specific absolute paths.
+            let text = fs::read_to_string(path).expect("read ftl");
+            writeln!(out, "        ({file:?}, {text:?}),").unwrap();
         }
         out.push_str("    ]),\n");
     }
@@ -103,7 +100,6 @@ fn read_locales(dir: &Path) -> BTreeMap<String, BTreeMap<String, PathBuf>> {
         for file in fs::read_dir(entry.path()).expect("read locale dir") {
             let path = file.expect("file entry").path();
             if path.extension().is_some_and(|ext| ext == "ftl") {
-                println!("cargo:rerun-if-changed={}", path.display());
                 let name = path
                     .file_name()
                     .expect("file name")

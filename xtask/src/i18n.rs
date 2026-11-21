@@ -2,11 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[path = "../../crates/duydas-i18n/src/schema.rs"]
-#[allow(dead_code, unreachable_pub)]
-mod schema;
-
-use schema::MessageInfo;
+use duydas_i18n::UiLocale;
+use duydas_i18n::schema::{self, MessageInfo};
 
 const SOURCE_LOCALE: &str = "en-US";
 
@@ -30,6 +27,19 @@ pub(crate) fn check(root: &Path, strict: bool) -> Result<(), String> {
     let mut warnings = Vec::new();
 
     let locales = load_locales(&locales_dir, &mut errors)?;
+    for locale in UiLocale::SHIPPED {
+        if !locales.contains_key(locale.tag()) {
+            errors.push(format!(
+                "shipped locale {} has no locales/{} directory",
+                locale.tag(),
+                locale.tag()
+            ));
+        }
+    }
+    // Full Fluent validation (duplicate terms, resolver-level problems) on top of the schema diff.
+    if let Err(bundle_errors) = duydas_i18n::validate_shipped_bundles() {
+        errors.extend(bundle_errors);
+    }
     let source = locales
         .get(SOURCE_LOCALE)
         .ok_or_else(|| format!("missing source locale {SOURCE_LOCALE}"))?;
@@ -95,16 +105,12 @@ pub(crate) fn check(root: &Path, strict: bool) -> Result<(), String> {
         if !UI_CODE_DIRS.iter().any(|dir| rel.starts_with(dir)) {
             continue;
         }
-        for (line_no, line) in text.lines().enumerate() {
-            if line.trim_start().starts_with("//") {
-                continue;
-            }
-            if passes_literal_to_sink(line) {
-                errors.push(format!(
-                    "{rel}:{}: hardcoded UI string; add an FTL message and use Key::…",
-                    line_no + 1
-                ));
-            }
+        let code = strip_comments(text);
+        for offset in literal_sink_calls(&code) {
+            let line_no = code[..offset].matches('\n').count() + 1;
+            errors.push(format!(
+                "{rel}:{line_no}: hardcoded UI string; add an FTL message and use Key::…"
+            ));
         }
     }
 
@@ -127,40 +133,115 @@ pub(crate) fn check(root: &Path, strict: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// True if `line` calls one of [`TEXT_SINKS`] with a string literal, e.g. `text("Hi")`,
-/// `text::<Theme>("Hi")` or `.placeholder( "Hi")`, but not `context("Hi")`.
-fn passes_literal_to_sink(line: &str) -> bool {
-    let bytes = line.as_bytes();
-    TEXT_SINKS.iter().any(|sink| {
-        line.match_indices(sink).any(|(start, _)| {
+/// Byte offsets where one of [`TEXT_SINKS`] is called with a string literal as its first
+/// argument: `text("Hi")`, `text::<Theme>("Hi")`, `.placeholder(\n r#"Hi"#)`, but not
+/// `context("Hi")` or `text(l.tr(..))`. Expects comments already blanked by [`strip_comments`].
+fn literal_sink_calls(code: &str) -> Vec<usize> {
+    let bytes = code.as_bytes();
+    let mut hits = Vec::new();
+    for sink in TEXT_SINKS {
+        for (start, _) in code.match_indices(sink) {
             let before = start.checked_sub(1).map(|i| bytes[i]);
             if before.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                return false;
+                continue;
             }
-            let mut rest = &line[start + sink.len()..];
-            if let Some(after_turbofish) = rest.strip_prefix("::<") {
-                let mut depth = 1usize;
-                let mut end = None;
-                for (i, c) in after_turbofish.char_indices() {
-                    match c {
-                        '<' => depth += 1,
-                        '>' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                end = Some(i + 1);
-                                break;
-                            }
+            let mut rest = &code[start + sink.len()..];
+            if let Some(generics) = rest.strip_prefix("::<") {
+                let Some(end) = matching_angle(generics) else {
+                    continue;
+                };
+                rest = &generics[end..];
+            }
+            let Some(args) = rest.strip_prefix('(') else {
+                continue;
+            };
+            let arg = args.trim_start();
+            let raw = arg.strip_prefix('r').map(|r| r.trim_start_matches('#'));
+            if arg.starts_with('"') || raw.is_some_and(|r| r.starts_with('"')) {
+                hits.push(start);
+            }
+        }
+    }
+    hits.sort_unstable();
+    hits
+}
+
+/// Index just past the `>` closing a turbofish whose opening `<` was already consumed.
+fn matching_angle(s: &str) -> Option<usize> {
+    let mut depth = 1usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Replaces `//` and `/* */` comments with spaces (keeping newlines, so offsets and line numbers
+/// survive) while leaving string and char literals intact.
+fn strip_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let blank = |c: char| if c == '\n' { '\n' } else { ' ' };
+    while i < chars.len() {
+        match (chars[i], chars.get(i + 1).copied()) {
+            ('/', Some('/')) => {
+                while i < chars.len() && chars[i] != '\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+            }
+            ('/', Some('*')) => {
+                let mut depth = 0usize;
+                while i < chars.len() {
+                    if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        out.push_str("  ");
+                        i += 2;
+                    } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        out.push_str("  ");
+                        i += 2;
+                        if depth == 0 {
+                            break;
                         }
-                        _ => {}
+                    } else {
+                        out.push(blank(chars[i]));
+                        i += 1;
                     }
                 }
-                let Some(end) = end else { return false };
-                rest = &after_turbofish[end..];
             }
-            rest.strip_prefix('(')
-                .is_some_and(|args| args.trim_start().starts_with('"'))
-        })
-    })
+            ('"', _) => {
+                out.push('"');
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        out.push(chars[i]);
+                        i += 1;
+                    }
+                    out.push(chars[i]);
+                    i += 1;
+                }
+                if i < chars.len() {
+                    out.push('"');
+                    i += 1;
+                }
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 type LocaleMessages = BTreeMap<String, MessageInfo>;
@@ -241,7 +322,11 @@ fn walk(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
 
 #[cfg(test)]
 mod tests {
-    use super::passes_literal_to_sink as hit;
+    use super::{literal_sink_calls, strip_comments};
+
+    fn hit(src: &str) -> bool {
+        !literal_sink_calls(&strip_comments(src)).is_empty()
+    }
 
     #[test]
     fn detects_literals_passed_to_text_sinks() {
@@ -249,13 +334,26 @@ mod tests {
         assert!(hit(r#"    .placeholder( "Type here")"#));
         assert!(hit(r#"iced::widget::text::<Theme, Renderer>("Hi")"#));
         assert!(hit(r#"button("Send").on_press(m)"#));
+        assert!(hit("text(\n    \"multi-line\"\n)"));
+        assert!(hit(r##"text(r#"raw"#)"##));
     }
 
     #[test]
-    fn ignores_localized_and_unrelated_calls() {
+    fn ignores_localized_unrelated_and_commented_calls() {
         assert!(!hit("text(l.tr(Key::SettingsTitle))"));
         assert!(!hit(r#"context("not ui")"#));
         assert!(!hit(r#"my_text("helper")"#));
         assert!(!hit("text(m.as_str())"));
+        assert!(!hit(r#"// text("commented")"#));
+        assert!(!hit(r#"/* text("block") */ let a = 1;"#));
+        assert!(!hit(r#"let s = "text(\"inside a string\")";"#));
+    }
+
+    #[test]
+    fn line_numbers_survive_comment_stripping() {
+        let src = "/* one\ntwo */\nlet x = text(\"Hi\");\n";
+        let code = strip_comments(src);
+        let offset = literal_sink_calls(&code)[0];
+        assert_eq!(code[..offset].matches('\n').count() + 1, 3);
     }
 }

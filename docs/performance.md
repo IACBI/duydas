@@ -5,7 +5,7 @@ Budgets are **provisional** until every Phase 0 baseline is in. After that they 
 ## Measurement markers
 
 - `launch`: process spawn, measured by `cargo xtask perf` from outside the app.
-- `first_present`: the app prints `duydas-perf first_frame_ms=…` on its first `RedrawRequested` when `DUYDAS_PERF=1` is set.
+- `first_redraw`: the app prints `duydas-perf first_redraw_ms=…` on its first `RedrawRequested` when `DUYDAS_PERF=1` is set. Iced emits that event just before presenting, so it marks the first frame attempt; confirming the actual present needs renderer instrumentation (planned with the Phase 1 perf gate).
 - `interactive`: cached channel visible and composer focusable (Phase 1, once there is real content).
 - Memory: Windows private bytes and working set, macOS `phys_footprint` (via `footprint`), Linux PSS. GPU driver allocations count toward Windows private bytes, so renderer choice dominates that number (see baseline below).
 
@@ -13,7 +13,7 @@ Budgets are **provisional** until every Phase 0 baseline is in. After that they 
 
 | Metric | Target |
 |---|---|
-| Warm launch → first_present | ≤ 300 ms p50 / 600 ms p95 |
+| Warm launch → first_redraw | ≤ 300 ms p50 / 600 ms p95 |
 | Warm launch → interactive | ≤ 500 ms p50 |
 | Idle memory (1 community, 1 channel) | ≤ 90 MB |
 | Heavy (20 communities, 50k cached messages, in voice) | ≤ 200 MB |
@@ -32,7 +32,7 @@ Budgets are **provisional** until every Phase 0 baseline is in. After that they 
 
 Machine: Windows 11 Pro, Intel Core i5-11400H, 32 GB RAM, NVIDIA RTX 3050 Ti Laptop + Intel UHD. Release build (thin LTO, `panic = "abort"`), shell with sidebar, text and composer, 1100×720 window. Warm runs; the first cold run is excluded from p50.
 
-| Renderer | spawn → first frame (p50) | Private bytes | Working set |
+| Renderer | spawn → first redraw (p50) | Private bytes | Working set |
 |---|---|---|---|
 | wgpu, `HighPerformance` (Iced default → discrete GPU) | 790 ms | 246 MB | 219 MB |
 | wgpu, `WGPU_POWER_PREF=low` (integrated GPU) | 531 ms | 127 MB | 172 MB |
