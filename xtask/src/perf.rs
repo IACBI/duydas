@@ -7,14 +7,16 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const IDLE_BEFORE_SAMPLE: Duration = Duration::from_millis(2500);
 const MARKER_TIMEOUT: Duration = Duration::from_secs(30);
 const MARKER: &str = "duydas-perf first_redraw_ms=";
+const STDERR_TAIL: usize = 8 * 1024;
 
 /// Kills the child on every exit path, including early returns and panics.
-struct Guard(Child);
+pub(crate) struct Guard(pub(crate) Child);
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -33,7 +35,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
         None => 5,
     };
 
-    let exe = build_release(root)?;
+    let exe = build_release(root, "duydas-desktop")?;
     let mut redraws = Vec::with_capacity(runs);
     for run in 1..=runs {
         let (first_redraw, mem) = measure_once(&exe)?;
@@ -48,16 +50,16 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Builds the desktop app and returns the executable path Cargo reports, which honors
+/// Builds `package` in release mode and returns the executable path Cargo reports, which honors
 /// `CARGO_TARGET_DIR`, `build.target-dir` and target-triple configuration.
-fn build_release(root: &Path) -> Result<PathBuf, String> {
+pub(crate) fn build_release(root: &Path, package: &str) -> Result<PathBuf, String> {
     let output = Command::new(env!("CARGO"))
         .args([
             "build",
             "--release",
             "--locked",
             "-p",
-            "duydas-desktop",
+            package,
             "--message-format=json-render-diagnostics",
         ])
         .current_dir(root)
@@ -70,10 +72,10 @@ fn build_release(root: &Path) -> Result<PathBuf, String> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|line| line.contains("\"reason\":\"compiler-artifact\""))
-        .filter(|line| line.contains("\"name\":\"duydas-desktop\""))
+        .filter(|line| line.contains(&format!("\"name\":\"{package}\"")))
         .find_map(|line| json_string_field(line, "executable"))
         .map(PathBuf::from)
-        .ok_or_else(|| "cargo did not report the duydas-desktop executable".into())
+        .ok_or_else(|| format!("cargo did not report the {package} executable"))
 }
 
 /// Extracts a string field from one line of Cargo's JSON output. Cargo escapes only `\\` and
@@ -104,6 +106,7 @@ fn measure_once(exe: &Path) -> Result<(f64, String), String> {
             .map_err(|e| format!("spawn {}: {e}", exe.display()))?,
     );
     let stdout = guard.0.stdout.take().ok_or("no stdout")?;
+    let stderr = drain_stderr(&mut guard.0);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -115,17 +118,39 @@ fn measure_once(exe: &Path) -> Result<(f64, String), String> {
     });
     let Ok(elapsed) = rx.recv_timeout(MARKER_TIMEOUT) else {
         let _ = guard.0.kill();
-        let mut stderr = String::new();
-        if let Some(mut pipe) = guard.0.stderr.take() {
-            let _ = pipe.read_to_string(&mut stderr);
-        }
         return Err(format!(
-            "no first_redraw marker within {MARKER_TIMEOUT:?}; app stderr:\n{stderr}"
+            "no first_redraw marker within {MARKER_TIMEOUT:?}; app stderr:\n{}",
+            join_tail(stderr)
         ));
     };
     std::thread::sleep(IDLE_BEFORE_SAMPLE);
     let mem = sample_memory(guard.0.id());
     Ok((elapsed.as_secs_f64() * 1000.0, mem))
+}
+
+/// Reads the child's stderr on a thread, so a chatty child can't block on a full pipe before it
+/// prints its marker. Keeps the last few KB for error messages.
+pub(crate) fn drain_stderr(child: &mut Child) -> Option<JoinHandle<String>> {
+    let mut pipe = child.stderr.take()?;
+    Some(std::thread::spawn(move || {
+        let mut tail = Vec::new();
+        let mut buf = [0_u8; 4096];
+        while let Ok(n) = pipe.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&buf[..n]);
+            if tail.len() > STDERR_TAIL {
+                tail.drain(..tail.len() - STDERR_TAIL);
+            }
+        }
+        String::from_utf8_lossy(&tail).into_owned()
+    }))
+}
+
+/// The collected stderr tail; call after the child has exited or been killed.
+pub(crate) fn join_tail(handle: Option<JoinHandle<String>>) -> String {
+    handle.and_then(|h| h.join().ok()).unwrap_or_default()
 }
 
 fn sample_memory(pid: u32) -> String {

@@ -43,7 +43,7 @@ Binary size: 9.0 MB (both renderers compiled in).
 Findings, recorded in [ADR 0017](adr/0017-spike-renderer-baseline.md):
 
 1. The wgpu path misses the startup and memory budgets on this machine, and Iced 0.14 asks for the **high-performance** GPU by default, which wakes the discrete GPU on laptops. A chat app should never do that.
-2. The CPU renderer is about 10× faster to first frame and an order of magnitude smaller. It still needs frame-time measurements for scrolling at large window sizes and 200% scale (spike c) before it becomes the default.
+2. The CPU renderer is about 10× faster to first frame and an order of magnitude smaller, **but it fails the scrolling budget** (next section). The default is therefore wgpu on the low-power adapter, with DX12 on Windows (83 MB private in a same-session comparison, against 126 MB for wgpu's default backend). Startup remains open; see ADR 0017.
 
 Reproduce:
 
@@ -51,4 +51,17 @@ Reproduce:
 cargo xtask perf --runs 5
 ICED_BACKEND=tiny-skia cargo xtask perf --runs 5
 WGPU_POWER_PREF=low cargo xtask perf --runs 5
+WGPU_POWER_PREF=low WGPU_BACKEND=dx12 cargo xtask perf --runs 5
 ```
+
+## Baseline: scrolling 10k messages (2026-11-22)
+
+`cargo xtask vlist` runs `spikes/virtual-list` (a scripted scroll through 10,000 messages, with history prepends, jumps and two resizes) on each renderer at 1× and 2× scale. Interval statistics come from redraw timestamps. With vsync on they show cadence (144 Hz here), so the runner also runs wgpu with `ICED_PRESENT_MODE=no_vsync` to show cost.
+
+| Renderer | Scale | p99 | Max | Stalls > 50 ms |
+|---|---|---|---|---|
+| wgpu low-power, vsync | 1× / 2× | 15.1 / 14.7 ms | 33.7 / 16.9 ms | 0 / 0 |
+| wgpu low-power, no vsync (cost) | 1× / 2× | 3.3 / 3.6 ms | 27.5 / 10.0 ms | 0 / 0 |
+| tiny-skia | 1× / 2× | 26.3 / 60.7 ms | 39.9 / 69.2 ms | 0 / 51 |
+
+Details and the design findings behind these numbers are in [ADR 0018](adr/0018-spike-virtual-list.md).

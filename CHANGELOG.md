@@ -14,6 +14,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - CI (fmt, clippy, tests on Windows/macOS/Linux, i18n, cargo-deny, rustdoc, MSRV), CodeQL and Dependabot.
 - Architecture docs, ADRs, threat model draft, performance budgets and contributor guides.
 - Send button in the composer.
+- `duydas-ui::virtual_list`: windowing for variable-height, bottom-anchored lists (Fenwick-tree height index, measured rows, prepend-safe positioning).
+- `spikes/virtual-list` and `cargo xtask vlist`: scripted 10k-message scroll benchmark across renderers and scale factors.
 
 ### Fixed
 
@@ -22,6 +24,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Message counts use locale grouping (`1.234 mesaj`).
 - Pseudo-locale no longer mangles interpolated user data.
 - Generated localization code no longer embeds machine-specific absolute paths.
+- `xtask perf` drains the child's stderr while waiting, so a chatty app cannot block on a full pipe.
 - `xtask perf` validates `--runs`, times out when no marker arrives, always cleans up the child process and uses the executable path Cargo reports.
 - The hardcoded-string lint handles multi-line calls, raw strings and comments.
 

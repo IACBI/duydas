@@ -3,6 +3,7 @@
 //! - `i18n-check [--strict]`: validate every locale against en-US and lint UI code for hardcoded
 //!   strings. `--strict` also fails on unused keys and missing variables.
 //! - `perf [--runs N]`: launch the release desktop build and report startup and memory markers.
+//! - `vlist`: run the virtual-list spike (ADR 0018) on each renderer and scale factor.
 
 #![allow(
     clippy::print_stdout,
@@ -11,6 +12,7 @@
 
 mod i18n;
 mod perf;
+mod vlist;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,8 +22,9 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("i18n-check") => i18n::check(&workspace_root(), args.iter().any(|a| a == "--strict")),
         Some("perf") => perf::run(&workspace_root(), &args[1..]),
+        Some("vlist") => vlist::run(&workspace_root()),
         _ => {
-            eprintln!("usage: cargo xtask <i18n-check [--strict] | perf [--runs N]>");
+            eprintln!("usage: cargo xtask <i18n-check [--strict] | perf [--runs N] | vlist>");
             return ExitCode::from(2);
         }
     };

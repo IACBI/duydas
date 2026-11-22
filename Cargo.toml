@@ -10,6 +10,7 @@ members = [
     "apps/duydas-desktop",
     "apps/duydas-server",
     "xtask",
+    "spikes/virtual-list",
 ]
 default-members = ["apps/duydas-desktop"]
 

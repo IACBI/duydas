@@ -20,7 +20,7 @@ Each ADR records one decision: context, decision, consequences. Copy [`template.
 | [0014](0014-license.md) | Apache-2.0 | Accepted |
 | [0015](0015-spike-text-and-ime.md) | Spike: Turkish/Japanese text and IME | Pending: needs manual runs |
 | [0016](0016-spike-accessibility.md) | Spike: screen-reader support | Pending |
-| [0017](0017-spike-renderer-baseline.md) | Spike: renderer, startup and memory baseline | Measured on Windows; macOS/Linux pending |
-| [0018](0018-spike-virtual-list.md) | Spike: virtualized message list | Pending |
+| [0017](0017-spike-renderer-baseline.md) | Spike: renderer, startup and memory baseline | Revised: wgpu low-power (DX12 on Windows); open startup question |
+| [0018](0018-spike-virtual-list.md) | Spike: virtualized message list | Measured on Windows: pass on wgpu, fail on tiny-skia |
 | [0019](0019-spike-audio-pipeline.md) | Spike: audio pipeline | Pending |
 | [0020](0020-spike-update-trust.md) | Spike: Velopack + update metadata verification | Pending |

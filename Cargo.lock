@@ -738,6 +738,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "duydas-spike-vlist"
+version = "0.0.1"
+dependencies = [
+ "duydas-ui",
+ "iced",
+]
+
+[[package]]
 name = "duydas-ui"
 version = "0.0.1"
 dependencies = [
