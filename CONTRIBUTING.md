@@ -40,6 +40,21 @@ cargo xtask i18n-check
 - Sign off every commit to certify the [Developer Certificate of Origin](https://developercertificate.org/): `git commit -s`. By signing off you state that you have the right to submit the work under the project's license (Apache-2.0).
 - Keep pull requests focused. One logical change per PR is easiest to review.
 
+## Labels and milestones
+
+Every issue and pull request carries one `type:` label and at least one `area:` label. Maintainers set the milestone and add the rest.
+
+| Group | Labels |
+|---|---|
+| Type | `type: bug`, `type: feature`, `type: docs`, `type: performance`, `type: security`, `type: refactor`, `type: ci`, `type: chore` |
+| Area | `area: i18n`, `area: ui`, `area: platform`, `area: sys`, `area: core`, `area: client`, `area: server`, `area: voice`, `area: build` |
+| Status | `status: triage` (set by the issue forms), `status: blocked` |
+| Other | `priority: high`, `priority: low`, `breaking-change`, `new-language`, `accessibility`, `tracking`, `good first issue`, `help wanted` |
+
+Milestones follow the roadmap in [`docs/architecture.md`](docs/architecture.md) and the in-house replacement steps in [ADR 0021](docs/adr/0021-in-house-implementation.md); larger efforts have a `tracking` issue.
+
+Report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
+
 ## Translations
 
 Translators don't need Rust. Edit the `.ftl` files under `locales/<language>/` and run `cargo xtask i18n-check`, or open a [translation issue](https://github.com/IACBI/duydas/issues/new?template=translation.yml). To add a language, open a [new language issue](https://github.com/IACBI/duydas/issues/new?template=new_language.yml) first.
