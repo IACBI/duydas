@@ -5,3 +5,5 @@ extend-exclude = ["locales/", "Cargo.lock", "*.svg", "spikes/*/src/corpus.rs"]
 [default.extend-words]
 # Turkish words in the README's Türkçe section that resemble English typos.
 sistem = "sistem"
+# Win32 SDK names (TME_LEAVE, a TrackMouseEvent flag).
+tme = "tme"
