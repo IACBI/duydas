@@ -1,0 +1,4 @@
+# A hung test (for example a window event loop that never exits) fails after 2 minutes
+# instead of blocking CI until the job timeout.
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 4 }

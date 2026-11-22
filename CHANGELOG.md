@@ -16,6 +16,14 @@ All notable changes to this project are documented here. The format follows [Kee
 - Send button in the composer.
 - `duydas-ui::virtual_list`: windowing for variable-height, bottom-anchored lists (Fenwick-tree height index, measured rows, prepend-safe positioning).
 - `spikes/virtual-list` and `cargo xtask vlist`: scripted 10k-message scroll benchmark across renderers and scale factors.
+- `duydas-sys::window`: in-house window layer with a Win32 backend (ADR 0023). It has:
+  - a blocking event loop;
+  - keyboard and text input, and IME composition with candidate placement;
+  - pointer, wheel and capture-loss events;
+  - clipboard text and per-monitor DPI;
+  - damage-based presentation of CPU-rendered frames.
+
+  In the example: first frame 14 ms after `main`, 5.8 MB private memory, no CPU use while idle.
 
 ### Changed
 
@@ -35,4 +43,6 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Security
 
+- CI runs clippy on Windows and macOS too, so platform-specific `unsafe` code is linted where it compiles.
+- nextest stops a hung test after 2 minutes.
 - CI installs typos and cargo-deny through `taiki-e/install-action`, which verifies SHA256 checksums of downloaded binaries.
