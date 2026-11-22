@@ -28,7 +28,7 @@ This document is the map. Decisions and their reasoning live in [`adr/`](adr/REA
 | `duydas-core` | Pure domain logic: permissions, ids, validation. No I/O. | Permissions (hand-written flags) |
 | `duydas-proto` | Protobuf schema (`proto/`) and generated types. | Version constant + schema stub |
 | `duydas-i18n` | FTL parser and resolver, typed keys, negotiation, number/date/case formatting. No third-party crates (ADR 0022). | **Complete for Phase 0** |
-| `duydas-sys` | Hand-written OS bindings; the only crate allowed `unsafe` (ADR 0021). | System UI languages |
+| `duydas-sys` | Hand-written OS bindings; the only crate allowed `unsafe` (ADR 0021). | System UI languages; window, input, IME, clipboard and presentation on Windows (ADR 0023) |
 | `duydas-client` | Headless SDK: connection, outbox, cache, sync. | Phase 1 |
 | `duydas-voice` | Audio pipeline and WebRTC transport. | Phase 4 (spike in Phase 0) |
 | `duydas-ui` | Design tokens, theme, custom widgets. | Tokens + theme |

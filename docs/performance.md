@@ -65,3 +65,17 @@ WGPU_POWER_PREF=low WGPU_BACKEND=dx12 cargo xtask perf --runs 5
 | tiny-skia | 1× / 2× | 26.3 / 60.7 ms | 39.9 / 69.2 ms | 0 / 51 |
 
 Details and the design findings behind these numbers are in [ADR 0018](adr/0018-spike-virtual-list.md).
+
+## Baseline: in-house window layer (2026-11-22)
+
+`examples/window.rs` in duydas-sys, release build, same machine as above. The window shows a full-window gradient and no text, at 1280×900 physical.
+
+| | Command | Value |
+|---|---|---|
+| `main` → first successful present, p50 / p95 of 21 runs | `-- --first-frame` | 14 ms / 16 ms |
+| One present: full frame / one 48×48 damage rectangle | `-- --present-bench` | about 1.7 ms / 30 µs |
+| Private bytes / working set | `-- --idle 6` | 5.8 MB / 14.2 MB |
+| CPU used over a 3 s idle sample | `-- --idle 6` | 0.0 ms |
+| Events while idle | `-- --idle 6` | none after the focus and paint that follow showing |
+
+Run with `cargo run --release -p duydas-sys --example window -- <flag>`. The in-process clock starts at `main`, while the Iced baseline above starts at process spawn, so the two are not comparable. Design and caveats: [ADR 0023](adr/0023-platform-layer.md).

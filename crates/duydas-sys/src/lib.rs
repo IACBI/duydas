@@ -4,3 +4,4 @@
 //! `SAFETY:` comment, does one unsafe operation, and is wrapped in a safe function.
 
 pub mod locale;
+pub mod window;

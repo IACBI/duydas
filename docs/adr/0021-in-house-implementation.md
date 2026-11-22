@@ -29,7 +29,7 @@ Hand-written crypto would need an independent audit before anyone could trust it
 | Step | Area | Replaces | State |
 |---|---|---|---|
 | 1 | Localization, permissions, system language | fluent-bundle, fluent-syntax, fluent-langneg, unic-langid, ICU4X, sys-locale, bitflags | **Done** (ADR 0022) |
-| 2 | Platform layer: windows, input, clipboard, IME. Win32 first, then Wayland/X11 and Cocoa | winit (via Iced) | Next |
+| 2 | Platform layer: windows, input, clipboard, IME. Win32 first, then Wayland/X11 and Cocoa | winit (via Iced) | **Win32 done** (ADR 0023); Wayland/X11 and Cocoa next |
 | 3 | Renderer: CPU rasterizer with damage tracking and scroll blitting; a GPU path only if measurements require it | wgpu, tiny-skia | |
 | 4 | Text: OpenType parsing, glyph rasterization, font fallback, UAX #14 line breaking (Japanese line-breaking rules included) | cosmic-text | |
 | 5 | Widgets, layout and the Elm-style update loop; port of the virtual list (ADR 0018) | iced | |

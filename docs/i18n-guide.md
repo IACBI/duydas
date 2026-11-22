@@ -57,7 +57,14 @@ The composer must handle input methods correctly. **Enter while a composition is
 | Linux Wayland (KDE) | fcitx5 + Mozc | | | | | |
 | Linux X11 | fcitx5 + Mozc | | | | | |
 
-Also check: switching keyboard layouts with Win+Space while the window is focused (Iced issue #3189), DPI changes while composing, and switching UI language during a composition.
+Also check:
+
+- switching keyboard layouts with Win+Space while the window is focused (Iced issue #3189);
+- moving the window between monitors with different scaling, also while composing;
+- switching UI language during a composition;
+- closing the window while dragging its border.
+
+For the in-house window layer (ADR 0023), run `cargo run -p duydas-sys --example window`. Its title bar shows the preedit in brackets and the committed text.
 
 ## Fonts
 

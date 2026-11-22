@@ -26,3 +26,4 @@ Each ADR records one decision: context, decision, consequences. Copy [`template.
 | [0020](0020-spike-update-trust.md) | Spike: Velopack + update metadata verification | Pending |
 | [0021](0021-in-house-implementation.md) | Write the stack in-house; libraries only for Opus and cryptography | Accepted |
 | [0022](0022-in-house-localization.md) | In-house FTL parser, resolver and locale data | Accepted |
+| [0023](0023-platform-layer.md) | In-house platform layer, starting with Win32 | Accepted |
