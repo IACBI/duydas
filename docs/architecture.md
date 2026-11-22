@@ -31,10 +31,11 @@ This document is the map. Decisions and their reasoning live in [`adr/`](adr/REA
 | `duydas-sys` | Hand-written OS bindings; the only crate allowed `unsafe` (ADR 0021). | System UI languages; window, input, IME, clipboard and presentation on Windows (ADR 0023) |
 | `duydas-client` | Headless SDK: connection, outbox, cache, sync. | Phase 1 |
 | `duydas-voice` | Audio pipeline and WebRTC transport. | Phase 4 (spike in Phase 0) |
+| `duydas-render` | CPU renderer: canvas, display list, rasterizers, damage tracking and scroll blitting. No dependencies, no `unsafe` (ADR 0024). | Complete for step 3; not yet used by the app |
 | `duydas-ui` | Design tokens, theme, custom widgets. | Tokens + theme |
 | `apps/duydas-desktop` | The Iced application. | Phase 0 shell |
 | `apps/duydas-server` | Self-hostable server binary. | Phase 1 |
-| `xtask` | `i18n-check`, `perf`, later `proto-gen` and release helpers. | i18n-check, perf |
+| `xtask` | `i18n-check`, `perf`, benchmarks, later `proto-gen` and release helpers. | i18n-check, perf, vlist, render-bench |
 
 ## Key invariants
 

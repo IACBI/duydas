@@ -53,15 +53,20 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
 /// Builds `package` in release mode and returns the executable path Cargo reports, which honors
 /// `CARGO_TARGET_DIR`, `build.target-dir` and target-triple configuration.
 pub(crate) fn build_release(root: &Path, package: &str) -> Result<PathBuf, String> {
+    build_release_target(root, &["-p", package], package)
+}
+
+/// Builds with extra `cargo build` arguments (a package, an example) and returns the executable
+/// of the target called `name`.
+pub(crate) fn build_release_target(
+    root: &Path,
+    args: &[&str],
+    name: &str,
+) -> Result<PathBuf, String> {
     let output = Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "--release",
-            "--locked",
-            "-p",
-            package,
-            "--message-format=json-render-diagnostics",
-        ])
+        .args(["build", "--release", "--locked"])
+        .args(args)
+        .arg("--message-format=json-render-diagnostics")
         .current_dir(root)
         .stderr(Stdio::inherit())
         .output()
@@ -72,14 +77,14 @@ pub(crate) fn build_release(root: &Path, package: &str) -> Result<PathBuf, Strin
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|line| line.contains("\"reason\":\"compiler-artifact\""))
-        .filter(|line| line.contains(&format!("\"name\":\"{package}\"")))
+        .filter(|line| line.contains(&format!("\"name\":\"{name}\"")))
         .find_map(|line| json_string_field(line, "executable"))
         .map(PathBuf::from)
-        .ok_or_else(|| format!("cargo did not report the {package} executable"))
+        .ok_or_else(|| format!("cargo did not report the {name} executable"))
 }
 
-/// Extracts a string field from one line of Cargo's JSON output. Cargo escapes only `\\` and
-/// `"` in paths, which is all this needs to undo.
+/// Extracts a string field from one line of Cargo's JSON output, decoding every JSON escape:
+/// a target directory may contain any character.
 fn json_string_field(line: &str, field: &str) -> Option<String> {
     let key = format!("\"{field}\":\"");
     let start = line.find(&key)? + key.len();
@@ -88,11 +93,40 @@ fn json_string_field(line: &str, field: &str) -> Option<String> {
     while let Some(c) = chars.next() {
         match c {
             '"' => return Some(out),
-            '\\' => out.push(chars.next()?),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{c}'),
+                'u' => {
+                    let unit = hex4(&mut chars)?;
+                    let c = if (0xD800..0xDC00).contains(&unit) {
+                        // A high surrogate must be followed by an escaped low surrogate.
+                        if chars.next()? != '\\' || chars.next()? != 'u' {
+                            return None;
+                        }
+                        let low = hex4(&mut chars)?;
+                        if !(0xDC00..0xE000).contains(&low) {
+                            return None;
+                        }
+                        char::from_u32(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00))?
+                    } else {
+                        char::from_u32(unit)?
+                    };
+                    out.push(c);
+                }
+                // \" \\ and \/ stand for themselves.
+                other => out.push(other),
+            },
             other => out.push(other),
         }
     }
     None
+}
+
+fn hex4(chars: &mut std::str::Chars<'_>) -> Option<u32> {
+    (0..4).try_fold(0, |acc, _| Some(acc * 16 + chars.next()?.to_digit(16)?))
 }
 
 fn measure_once(exe: &Path) -> Result<(f64, String), String> {
@@ -196,6 +230,23 @@ fn file_mb(path: &Path) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::json_string_field;
+
+    #[test]
+    fn json_strings_decode_every_escape() {
+        let line = r#"{"executable":"C:\\t\tx\"q\u00e7\ud83d\ude00\/end","x":1}"#;
+        assert_eq!(
+            json_string_field(line, "executable").as_deref(),
+            Some("C:\\t\tx\"q\u{e7}\u{1F600}/end")
+        );
+        assert_eq!(
+            json_string_field(r#"{"executable":"a\ud83dx"}"#, "executable"),
+            None
+        );
+        assert_eq!(
+            json_string_field(r#"{"executable":"unterminated"#, "executable"),
+            None
+        );
+    }
 
     #[test]
     fn extracts_escaped_executable_path() {

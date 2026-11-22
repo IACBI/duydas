@@ -24,6 +24,15 @@ All notable changes to this project are documented here. The format follows [Kee
   - damage-based presentation of CPU-rendered frames.
 
   In the example: first frame 14 ms after `main`, 5.8 MB private memory, no CPU use while idle.
+- `duydas-render`: in-house CPU renderer (ADR 0024), with no dependencies and no `unsafe`. It has:
+  - anti-aliased rectangles, rounded rectangles and borders;
+  - glyph and icon masks, and images with rounded corners;
+  - clips and scroll layers;
+  - tile-fingerprint damage tracking, so only what changed is redrawn and presented;
+  - scroll blitting, so scrolling moves pixels and draws only the newly exposed rows.
+
+  Incremental frames are tested pixel for pixel against full redraws.
+- `cargo xtask render-bench`: replays the ADR 0018 scrolling session on the new renderer and checks the budget. With damage tracking, p99 is 1.5 ms at 1× and 2.5 ms at 2× (budget: 16.7 ms).
 
 ### Changed
 
@@ -38,6 +47,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Pseudo-locale no longer mangles interpolated user data.
 - Generated localization code no longer embeds machine-specific absolute paths.
 - `xtask perf` drains the child's stderr while waiting, so a chatty app cannot block on a full pipe.
+- `xtask` decodes every JSON escape in the executable path Cargo reports, so a target directory with unusual characters works.
 - `xtask perf` validates `--runs`, times out when no marker arrives, always cleans up the child process and uses the executable path Cargo reports.
 - The hardcoded-string lint handles multi-line calls, raw strings and comments.
 

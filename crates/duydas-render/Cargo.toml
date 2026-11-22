@@ -1,0 +1,17 @@
+[package]
+name = "duydas-render"
+description = "CPU renderer with damage tracking and scroll blitting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# Only the windowed benchmark example presents through the platform layer.
+duydas-sys.workspace = true

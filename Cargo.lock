@@ -698,6 +698,13 @@ name = "duydas-proto"
 version = "0.0.1"
 
 [[package]]
+name = "duydas-render"
+version = "0.0.1"
+dependencies = [
+ "duydas-sys",
+]
+
+[[package]]
 name = "duydas-server"
 version = "0.0.1"
 dependencies = [
