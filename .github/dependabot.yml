@@ -5,6 +5,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    labels: ["dependencies", "area: build"]
     groups:
       iced:
         patterns: ["iced*"]
@@ -12,6 +13,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    labels: ["dependencies", "type: ci"]
     groups:
       actions:
         patterns: ["*"]
