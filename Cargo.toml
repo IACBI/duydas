@@ -30,7 +30,6 @@ duydas-proto = { path = "crates/duydas-proto" }
 duydas-i18n = { path = "crates/duydas-i18n" }
 duydas-ui = { path = "crates/duydas-ui" }
 duydas-sys = { path = "crates/duydas-sys" }
-duydas-render = { path = "crates/duydas-render" }
 
 # Iced stays until the in-house toolkit replaces it (ADR 0021).
 # Defaults minus `web-colors` (intentionally wrong sRGB blending) and `crisp` (can jitter), plus
