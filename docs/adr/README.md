@@ -10,7 +10,7 @@ Each ADR records one decision: context, decision, consequences. Copy [`template.
 | [0004](0004-protobuf-wire.md) | Protobuf over WSS + HTTPS | Accepted |
 | [0005](0005-server-monolith-durable-log.md) | Single modular server with a transactional event log | Accepted |
 | [0006](0006-voice-str0m-sfu.md) | Voice SFU built on str0m | Accepted |
-| [0007](0007-fluent-icu4x.md) | Fluent messages with typed keys; ICU4X formatting | Accepted |
+| [0007](0007-fluent-icu4x.md) | Fluent messages with typed keys; ICU4X formatting | Superseded by 0022 |
 | [0008](0008-local-cache-keychain.md) | SQLite cache, tokens in the OS keychain | Accepted |
 | [0009](0009-protection-matrix.md) | Protection matrix and E2EE scope | Accepted |
 | [0010](0010-distribution-update-trust.md) | Velopack packages, Flatpak, and TUF-style update metadata | Accepted |
@@ -24,3 +24,5 @@ Each ADR records one decision: context, decision, consequences. Copy [`template.
 | [0018](0018-spike-virtual-list.md) | Spike: virtualized message list | Measured on Windows: pass on wgpu, fail on tiny-skia |
 | [0019](0019-spike-audio-pipeline.md) | Spike: audio pipeline | Pending |
 | [0020](0020-spike-update-trust.md) | Spike: Velopack + update metadata verification | Pending |
+| [0021](0021-in-house-implementation.md) | Write the stack in-house; libraries only for Opus and cryptography | Accepted |
+| [0022](0022-in-house-localization.md) | In-house FTL parser, resolver and locale data | Accepted |

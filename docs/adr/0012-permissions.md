@@ -9,7 +9,7 @@ Authorization bugs (IDOR, stale permissions) are the most likely serious server 
 
 ## Decision
 
-`duydas-core::permissions` resolves pure bitflags (ADMINISTRATOR implies all). Every handler goes through one `authorize(resource, action)`; permission-sensitive writes re-check in the transaction; revocation closes live subscriptions and calls.
+`duydas-core::permissions` resolves a hand-written u64 flag set (ADMINISTRATOR implies all; unknown bits from newer servers are dropped with `from_bits_truncate`). Every handler goes through one `authorize(resource, action)`; permission-sensitive writes re-check in the transaction; revocation closes live subscriptions and calls.
 
 ## Consequences
 
