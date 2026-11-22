@@ -1,0 +1,28 @@
+[package]
+name = "duydas-sys"
+description = "Operating-system bindings for Duydaş; the only crate allowed to use unsafe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Not `workspace = true`: the workspace forbids unsafe, and this crate is where FFI lives. Every
+# unsafe block must carry a SAFETY comment and do exactly one unsafe operation.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+print_stdout = "warn"

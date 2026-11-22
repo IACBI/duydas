@@ -1,7 +1,11 @@
-//! Generates the typed `Key` enum from the en-US source locale and embeds every locale's FTL.
+//! Validates every locale's FTL, generates the typed `Key` enum from the en-US source locale and
+//! embeds the files.
 
 #![allow(clippy::unwrap_used, reason = "writing into a String is infallible")]
 
+#[path = "src/ftl.rs"]
+#[allow(dead_code, unreachable_pub)]
+mod ftl;
 #[path = "src/schema.rs"]
 #[allow(dead_code, unreachable_pub)]
 mod schema;
@@ -19,6 +23,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", locales_dir.display());
 
     let locales = read_locales(&locales_dir);
+    validate_all(&locales);
     let source = locales.get(SOURCE_LOCALE).unwrap_or_else(|| {
         panic!(
             "source locale {SOURCE_LOCALE} missing in {}",
@@ -27,9 +32,8 @@ fn main() {
     });
 
     let mut messages = Vec::new();
-    for (file, path) in source {
-        let text = fs::read_to_string(path).expect("read ftl");
-        let parsed = schema::collect_messages(&text)
+    for (file, text) in source {
+        let parsed = schema::collect_messages(text)
             .unwrap_or_else(|errors| panic!("{SOURCE_LOCALE}/{file}: {errors:?}"));
         messages.extend(parsed.into_iter().filter(|m| m.has_value));
     }
@@ -74,10 +78,9 @@ fn main() {
     out.push_str("/// Embedded FTL sources: (locale tag, [(file name, contents)]).\npub(crate) static EMBEDDED: &[(&str, &[(&str, &str)])] = &[\n");
     for (locale, files) in &locales {
         writeln!(out, "    ({locale:?}, &[").unwrap();
-        for (file, path) in files {
+        for (file, text) in files {
             // Embedding the text itself (a Debug-escaped literal) keeps the generated code free of
             // machine-specific absolute paths.
-            let text = fs::read_to_string(path).expect("read ftl");
             writeln!(out, "        ({file:?}, {text:?}),").unwrap();
         }
         out.push_str("    ]),\n");
@@ -88,7 +91,32 @@ fn main() {
     fs::write(dest, out).expect("write generated.rs");
 }
 
-fn read_locales(dir: &Path) -> BTreeMap<String, BTreeMap<String, PathBuf>> {
+/// Fails the build if any locale has a syntax error, a duplicate id, a dangling reference or a
+/// reference cycle, so the runtime never has to handle broken embedded FTL.
+fn validate_all(locales: &Locales) {
+    let mut problems = Vec::new();
+    for (locale, files) in locales {
+        let mut parsed = Vec::new();
+        for (file, text) in files {
+            let (resource, errors) = ftl::parse(text);
+            problems.extend(errors.iter().map(|e| format!("{locale}/{file}:{e}")));
+            parsed.push((file.as_str(), resource));
+        }
+        let views: Vec<(&str, &ftl::Resource)> = parsed.iter().map(|(f, r)| (*f, r)).collect();
+        problems.extend(
+            schema::validate(&views)
+                .into_iter()
+                .map(|e| format!("{locale}: {e}")),
+        );
+    }
+    assert!(problems.is_empty(), "invalid FTL:\n{}", problems.join("\n"));
+}
+
+/// Locale tag to (file name, contents). Each file is read once, so validation, key generation and
+/// embedding all see the same text.
+type Locales = BTreeMap<String, BTreeMap<String, String>>;
+
+fn read_locales(dir: &Path) -> Locales {
     let mut locales = BTreeMap::new();
     for entry in fs::read_dir(dir).expect("read locales dir") {
         let entry = entry.expect("dir entry");
@@ -105,7 +133,8 @@ fn read_locales(dir: &Path) -> BTreeMap<String, BTreeMap<String, PathBuf>> {
                     .expect("file name")
                     .to_string_lossy()
                     .into_owned();
-                files.insert(name, path);
+                let text = fs::read_to_string(&path).expect("read ftl");
+                files.insert(name, text);
             }
         }
         locales.insert(tag, files);

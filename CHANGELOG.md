@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - Cargo workspace: client, server, shared crates and `xtask`.
-- `duydas-i18n`: Fluent messages with compile-time typed keys, system language detection, live language switching, ICU4X number/date formatting, Turkish-aware case mapping and a pseudo-locale.
+- `duydas-i18n`: Fluent-syntax messages with compile-time typed keys, system language detection, live language switching, number/date formatting, Turkish-aware case mapping and a pseudo-locale.
 - en-US, tr-TR and ja-JP seed translations.
 - Desktop shell with language picker, formatting preview and an IME-aware composer.
 - `cargo xtask i18n-check` and `cargo xtask perf`.
@@ -16,6 +16,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - Send button in the composer.
 - `duydas-ui::virtual_list`: windowing for variable-height, bottom-anchored lists (Fenwick-tree height index, measured rows, prepend-safe positioning).
 - `spikes/virtual-list` and `cargo xtask vlist`: scripted 10k-message scroll benchmark across renderers and scale factors.
+
+### Changed
+
+- Third-party crates are being replaced with in-house code (ADR 0021). Done so far: localization (own FTL parser and resolver, hand-written CLDR data for en, tr and ja), permissions flags and system language detection (`duydas-sys`, the only crate allowed `unsafe`). Our crates no longer depend on ICU4X, Fluent, sys-locale, unic-langid or bitflags directly. sys-locale and bitflags remain in `Cargo.lock` through Iced until the in-house UI replaces it.
+- The build now fails on invalid FTL in any locale: syntax errors, duplicate ids, references to missing messages, terms or attributes, and reference cycles.
 
 ### Fixed
 

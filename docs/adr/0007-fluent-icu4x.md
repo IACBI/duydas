@@ -1,6 +1,6 @@
 # 0007. Fluent messages with typed keys; ICU4X formatting
 
-- Status: Accepted
+- Status: Superseded by [ADR 0022](0022-in-house-localization.md)
 - Date: 2026-11-21
 
 ## Context

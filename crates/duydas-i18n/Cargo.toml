@@ -1,6 +1,6 @@
 [package]
 name = "duydas-i18n"
-description = "Localization for Duydaş: Fluent messages, locale negotiation and ICU4X formatting"
+description = "Localization for Duydaş: Fluent-syntax messages, locale negotiation and formatting"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,19 +10,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-fluent-bundle.workspace = true
-fluent-langneg.workspace = true
-fluent-syntax.workspace = true
-icu_casemap.workspace = true
-icu_datetime.workspace = true
-icu_decimal.workspace = true
-icu_locale_core.workspace = true
-icu_provider.workspace = true
-sys-locale.workspace = true
-unic-langid.workspace = true
-
-[build-dependencies]
-fluent-syntax.workspace = true
+duydas-sys.workspace = true
 
 [lints]
 workspace = true

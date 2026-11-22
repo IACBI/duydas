@@ -28,7 +28,7 @@ Duydaş launches in **English (en-US)**, **Turkish (tr-TR)** and **Japanese (ja-
 Rules:
 
 - Never build sentences by concatenating strings; give translators the whole sentence with variables.
-- Pass **numbers** as numbers when a plural form depends on them. Fluent's own number output is not locale-grouped, so for displayed large numbers pass `l10n.format_integer(n)` as a separate string variable.
+- Pass **numbers** as integers when a plural form depends on them. An integer variable selects the plural variant and is inserted with locale grouping (`1.234` in Turkish).
 - Format dates with `l10n.format_date`, never by hand.
 - Uppercase with `l10n.uppercase`. `str::to_uppercase` turns Turkish `i` into `I` instead of `İ`.
 - Don't inflect the product name inside Turkish sentences (`Duydaş'a`); phrase around it.
@@ -43,7 +43,7 @@ Rules:
 
 ## Adding a language
 
-Open a [new language issue](https://github.com/IACBI/duydas/issues/new?template=new_language.yml), then add `locales/<tag>/` with all files, add the variant to `UiLocale` in `crates/duydas-i18n/src/locale.rs`, and confirm ICU4X has data for the locale (the tests fail otherwise).
+Open a [new language issue](https://github.com/IACBI/duydas/issues/new?template=new_language.yml), then add `locales/<tag>/` with all files, add the variant to `UiLocale` in `crates/duydas-i18n/src/locale.rs`, and add the language's CLDR rules (plural categories, grouping separator, long date pattern and month names, any casing rules) to `crates/duydas-i18n/src/format.rs` with tests.
 
 ## Text input (IME) test matrix
 
@@ -62,3 +62,7 @@ Also check: switching keyboard layouts with Win+Space while the window is focuse
 ## Fonts
 
 Japanese text needs Japanese glyph forms. cosmic-text picks its Han fallback font from the system locale, so on an English system kanji can render with Chinese shapes. Bundling a Noto Sans JP subset and ordering fonts by UI language is planned; see [ADR 0015](adr/0015-spike-text-and-ime.md).
+
+## Supported syntax
+
+Duydaş parses FTL itself (ADR 0022). It supports messages, terms, attributes, comments, multiline text, variables, message and term references, string and number literals, and select expressions (plural categories and exact numbers such as `[0]`). It does not support functions such as `NUMBER()` or parameterized terms; the code passes values in already formatted, e.g. `$countText` next to `$count`. Unsupported syntax fails `cargo xtask i18n-check` with a line and column.

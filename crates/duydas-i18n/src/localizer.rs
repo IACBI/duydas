@@ -1,62 +1,32 @@
-use fluent_bundle::concurrent::FluentBundle;
-use fluent_bundle::{FluentArgs, FluentResource};
-use icu_casemap::CaseMapper;
-use icu_datetime::DateTimeFormatter;
-use icu_datetime::fieldsets::YMD;
-use icu_datetime::input::Date;
-use icu_decimal::DecimalFormatter;
-use icu_decimal::input::Decimal;
-use icu_locale_core::Locale;
-
-use crate::{Key, UiLocale, embedded_sources, pseudo};
-
-type Bundle = FluentBundle<FluentResource>;
+use crate::bundle::{Bundle, Transform};
+use crate::{Args, Key, UiLocale, embedded_sources, ftl, pseudo, schema};
 
 /// Everything needed to render UI text for one locale.
 ///
 /// Cheap to read and `Send + Sync`; build a new one to switch language.
+#[derive(Debug)]
 pub struct Localizer {
     ui_locale: UiLocale,
     bundle: Bundle,
     /// `None` when the active locale is the fallback itself.
     fallback: Option<Bundle>,
-    icu_locale: Locale,
-    decimal: DecimalFormatter,
-    date: DateTimeFormatter<YMD>,
-}
-
-impl std::fmt::Debug for Localizer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Localizer")
-            .field("ui_locale", &self.ui_locale)
-            .finish_non_exhaustive()
-    }
 }
 
 impl Localizer {
     /// Builds a localizer for `ui_locale`.
     ///
     /// # Panics
-    /// Panics if embedded FTL fails to parse or ICU4X compiled data lacks the locale. Both are
-    /// checked by tests and `cargo xtask i18n-check`, so a release build cannot hit them.
+    /// Panics if embedded FTL fails to parse or validate, which cannot happen in a built crate:
+    /// `build.rs` runs the same validation on every locale and fails the build instead.
     pub fn new(ui_locale: UiLocale) -> Self {
         let bundle = build_bundle(ui_locale).unwrap_or_else(|errors| panic!("{errors:?}"));
         let fallback = (ui_locale.resource_tag() != UiLocale::FALLBACK.tag()).then(|| {
             build_bundle(UiLocale::FALLBACK).unwrap_or_else(|errors| panic!("{errors:?}"))
         });
-        let icu_locale = Locale::try_from_str(ui_locale.resource_tag())
-            .unwrap_or_else(|_| unreachable!("static tags are valid"));
-        let decimal = DecimalFormatter::try_new(icu_locale.clone().into(), Default::default())
-            .expect("ICU4X compiled data includes decimal symbols for shipped locales");
-        let date = DateTimeFormatter::try_new(icu_locale.clone().into(), YMD::long())
-            .expect("ICU4X compiled data includes date patterns for shipped locales");
         Self {
             ui_locale,
             bundle,
             fallback,
-            icu_locale,
-            decimal,
-            date,
         }
     }
 
@@ -76,11 +46,11 @@ impl Localizer {
     }
 
     /// Formats a message with variables; see [`crate::args!`].
-    pub fn tr_args(&self, key: Key, args: &FluentArgs<'_>) -> String {
+    pub fn tr_args(&self, key: Key, args: &Args<'_>) -> String {
         if cfg!(debug_assertions) {
             for expected in key.variables() {
                 debug_assert!(
-                    args.get(*expected).is_some(),
+                    args.get(expected).is_some(),
                     "message {} expects ${expected}",
                     key.id()
                 );
@@ -91,24 +61,21 @@ impl Localizer {
 
     /// Formats an integer with locale grouping (`1,234` / `1.234` / `1,234`).
     pub fn format_integer(&self, value: i64) -> String {
-        self.decimal.format(&Decimal::from(value)).to_string()
+        self.ui_locale.lang().format_integer(value)
     }
 
     /// Formats a calendar date in the locale's long style
     /// (`November 21, 2026` / `21 Kasım 2026` / `2026年11月21日`).
     ///
-    /// Returns `None` for an invalid date.
+    /// Returns `None` for a date that does not exist.
     pub fn format_date(&self, year: i32, month: u8, day: u8) -> Option<String> {
-        let date = Date::try_new_iso(year, month, day).ok()?;
-        Some(self.date.format(&date).to_string())
+        self.ui_locale.lang().format_date(year, month, day)
     }
 
     /// Uppercases with the locale's rules (Turkish: `i` → `İ`). Never use `str::to_uppercase`
     /// on user-visible text.
     pub fn uppercase(&self, text: &str) -> String {
-        CaseMapper::new()
-            .uppercase_to_string(text, &self.icu_locale.id)
-            .into_owned()
+        self.ui_locale.lang().uppercase(text)
     }
 
     /// Keys whose value is missing from the active locale (they render from the fallback).
@@ -116,11 +83,11 @@ impl Localizer {
         Key::ALL
             .iter()
             .copied()
-            .filter(|key| !has_value(&self.bundle, key.id()))
+            .filter(|key| !self.bundle.has_value(key.id()))
             .collect()
     }
 
-    fn format(&self, key: Key, args: Option<&FluentArgs<'_>>) -> String {
+    fn format(&self, key: Key, args: Option<&Args<'_>>) -> String {
         let text = format_value(&self.bundle, key, args)
             .or_else(|| {
                 self.fallback
@@ -136,26 +103,17 @@ impl Localizer {
     }
 }
 
-fn has_value(bundle: &Bundle, id: &str) -> bool {
-    bundle.get_message(id).is_some_and(|m| m.value().is_some())
-}
-
-/// Formats `key`'s value, or `None` if the bundle lacks it or resolution reported errors, so the
-/// caller can fall back to the source locale instead of showing partial text.
-fn format_value(bundle: &Bundle, key: Key, args: Option<&FluentArgs<'_>>) -> Option<String> {
-    let pattern = bundle.get_message(key.id())?.value()?;
-    let mut errors = Vec::new();
-    let text = bundle
-        .format_pattern(pattern, args, &mut errors)
-        .into_owned();
-    debug_assert!(errors.is_empty(), "formatting {}: {errors:?}", key.id());
-    errors.is_empty().then_some(text)
+/// Formats `key`'s value, or `None` if the bundle lacks it or resolution failed (for example a
+/// translation using a variable the code does not pass), so the caller falls back to the source
+/// locale instead of showing partial text. `cargo xtask i18n-check` reports such translations.
+fn format_value(bundle: &Bundle, key: Key, args: Option<&Args<'_>>) -> Option<String> {
+    bundle.format(key.id(), args).ok()
 }
 
 /// Builds and validates every shipped locale's bundle without panicking.
 ///
 /// # Errors
-/// Returns one message per FTL parse or bundle error.
+/// Returns one message per syntax error, duplicate id or dangling reference.
 pub fn validate_shipped_bundles() -> Result<(), Vec<String>> {
     let errors: Vec<String> = UiLocale::SHIPPED
         .iter()
@@ -171,31 +129,33 @@ pub fn validate_shipped_bundles() -> Result<(), Vec<String>> {
 
 fn build_bundle(locale: UiLocale) -> Result<Bundle, Vec<String>> {
     let tag = locale.resource_tag();
-    let mut bundle = Bundle::new_concurrent(vec![locale.langid()]);
-    // Fluent wraps placeables in FSI/PDI marks for bidi safety. No shipped locale is RTL yet, and
-    // the marks show up in copied text and grapheme counts; re-enable when an RTL locale lands.
-    bundle.set_use_isolating(false);
-    if locale == UiLocale::Pseudo {
-        bundle.set_transform(Some(pseudo::accent_text));
-    }
     let sources =
         embedded_sources(tag).ok_or_else(|| vec![format!("no embedded resources for {tag}")])?;
     let mut errors = Vec::new();
+    let mut parsed = Vec::with_capacity(sources.len());
     for (file, source) in sources {
-        match FluentResource::try_new((*source).to_owned()) {
-            Ok(resource) => {
-                if let Err(errs) = bundle.add_resource(resource) {
-                    errors.extend(errs.iter().map(|e| format!("{tag}/{file}: {e:?}")));
-                }
-            }
-            Err((_, errs)) => errors.extend(errs.iter().map(|e| format!("{tag}/{file}: {e:?}"))),
-        }
+        let (resource, syntax) = ftl::parse(source);
+        errors.extend(syntax.iter().map(|e| format!("{tag}/{file}:{e}")));
+        parsed.push((*file, resource));
     }
-    if errors.is_empty() {
-        Ok(bundle)
-    } else {
-        Err(errors)
+    let views: Vec<_> = parsed
+        .iter()
+        .map(|(file, resource)| (*file, resource))
+        .collect();
+    errors.extend(
+        schema::validate(&views)
+            .into_iter()
+            .map(|e| format!("{tag}: {e}")),
+    );
+    if !errors.is_empty() {
+        return Err(errors);
     }
+    let transform = (locale == UiLocale::Pseudo).then_some(pseudo::accent_text as Transform);
+    let mut bundle = Bundle::new(locale.lang(), transform);
+    for (_, resource) in parsed {
+        bundle.add(resource);
+    }
+    Ok(bundle)
 }
 
 #[cfg(test)]
@@ -220,9 +180,9 @@ mod tests {
         for locale in UiLocale::selectable() {
             let l10n = Localizer::new(locale);
             for key in Key::ALL {
-                let mut args = FluentArgs::new();
+                let mut args = Args::new();
                 for var in key.variables() {
-                    args.set(*var, 2);
+                    args.set(var, 2);
                 }
                 let text = l10n.tr_args(*key, &args);
                 assert!(

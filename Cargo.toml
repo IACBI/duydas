@@ -7,6 +7,7 @@ members = [
     "crates/duydas-client",
     "crates/duydas-voice",
     "crates/duydas-ui",
+    "crates/duydas-sys",
     "apps/duydas-desktop",
     "apps/duydas-server",
     "xtask",
@@ -27,18 +28,9 @@ publish = false
 duydas-proto = { path = "crates/duydas-proto" }
 duydas-i18n = { path = "crates/duydas-i18n" }
 duydas-ui = { path = "crates/duydas-ui" }
+duydas-sys = { path = "crates/duydas-sys" }
 
-bitflags = "2.9"
-fluent-bundle = "0.16"
-# 0.13 matches fluent-bundle's unic-langid; 0.14 switches to icu_locid 1.x and would duplicate locale types.
-fluent-langneg = "0.13"
-fluent-syntax = "0.12"
-icu_casemap = "2.4"
-icu_datetime = { version = "2.4", default-features = false, features = ["compiled_data"] }
-icu_decimal = "2.4"
-icu_locale_core = "2.4"
-# `sync` makes ICU4X data payloads Arc-backed so the Localizer is Send + Sync.
-icu_provider = { version = "2.4", features = ["sync"] }
+# Iced stays until the in-house toolkit replaces it (ADR 0021).
 # Defaults minus `web-colors` (intentionally wrong sRGB blending) and `crisp` (can jitter), plus
 # advanced text shaping for Turkish/Japanese and the tokio executor the client SDK runs on.
 iced = { version = "0.14", default-features = false, features = [
@@ -51,8 +43,6 @@ iced = { version = "0.14", default-features = false, features = [
     "tokio",
     "advanced",
 ] }
-sys-locale = "0.3"
-unic-langid = "0.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
