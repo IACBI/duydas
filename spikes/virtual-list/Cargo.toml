@@ -1,0 +1,17 @@
+[package]
+name = "duydas-spike-vlist"
+description = "Spike (ADR 0018): virtualized chat history"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+duydas-ui.workspace = true
+iced.workspace = true
+
+[lints]
+workspace = true
