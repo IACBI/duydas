@@ -79,3 +79,16 @@ Details and the design findings behind these numbers are in [ADR 0018](adr/0018-
 | Events while idle | `-- --idle 6` | none after the focus and paint that follow showing |
 
 Run with `cargo run --release -p duydas-sys --example window -- <flag>`. The in-process clock starts at `main`, while the Iced baseline above starts at process spawn, so the two are not comparable. Design and caveats: [ADR 0023](adr/0023-platform-layer.md).
+
+## Baseline: in-house CPU renderer (2026-11-22)
+
+`cargo xtask render-bench` runs `crates/duydas-render/examples/scroll`, which replays the ADR 0018 session (same corpus and script) through `duydas-render`. It checks the damage-tracking runs against the scrolling budget and fails if either misses it; full redraws are printed for comparison. Same machine as above, five runs, release build, headless. A frame is building the scene plus rendering it.
+
+| Mode | Scale | p99: median (range) | Worst frame | Stalls &gt; 50 ms |
+|---|---|---|---|---|
+| Damage tracking | 1× / 2× | 1.5 ms (0.9–3.0) / 2.5 ms (2.0–7.7) | 14.8 / 41.6 ms | 0 / 0 |
+| Full redraw | 1× / 2× | 1.8 ms (1.5–3.2) / 7.2 ms (6.5–11.8) | 5.7 / 54 ms | 0 / 1 run of 5 |
+
+In a real window (`--window`, presented through `duydas-sys`, 1125 × 875 physical pixels at 125%), damage tracking measured p99 2.5 ms at 1× and 1.9 ms at 2× layout scale, presents included, with no stalls.
+
+Text uses synthetic glyph masks, so shaping and glyph rasterization are not measured yet; the numbers do not compare one-to-one with the Iced runs above. Details: [ADR 0024](adr/0024-cpu-renderer.md).

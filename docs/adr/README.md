@@ -27,3 +27,4 @@ Each ADR records one decision: context, decision, consequences. Copy [`template.
 | [0021](0021-in-house-implementation.md) | Write the stack in-house; libraries only for Opus and cryptography | Accepted |
 | [0022](0022-in-house-localization.md) | In-house FTL parser, resolver and locale data | Accepted |
 | [0023](0023-platform-layer.md) | In-house platform layer, starting with Win32 | Accepted |
+| [0024](0024-cpu-renderer.md) | In-house CPU renderer with damage tracking and scroll blitting | Accepted |
