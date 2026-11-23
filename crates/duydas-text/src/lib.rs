@@ -1,6 +1,6 @@
 //! Duydaş text stack (ADR 0021, step 4).
 //!
-//! Its first part is Unicode text segmentation from Unicode 18.0 data (ADR 0025):
+//! Unicode text segmentation from Unicode 18.0 data (ADR 0025):
 //!
 //! - [`graphemes`]: extended grapheme clusters (UAX #29), the unit of cursor movement and
 //!   deletion;
@@ -10,7 +10,10 @@
 //!
 //! Every function takes byte offsets into UTF-8 text. All three algorithms pass the Unicode
 //! conformance tests.
+//!
+//! Fonts (ADR 0026): [`font`] parses OpenType fonts and rasterizes their glyphs.
 
+pub mod font;
 mod grapheme;
 mod line;
 mod props;

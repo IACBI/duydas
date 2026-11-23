@@ -20,3 +20,5 @@ tme = "tme"
 ba = "ba"
 # General_Category Nd (decimal number).
 nd = "nd"
+# OpenType table that indexes glyph data (`loca`).
+loca = "loca"

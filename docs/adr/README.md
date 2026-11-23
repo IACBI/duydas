@@ -29,3 +29,4 @@ Each ADR records one decision: context, decision, consequences. Copy [`template.
 | [0023](0023-platform-layer.md) | In-house platform layer, starting with Win32 | Accepted |
 | [0024](0024-cpu-renderer.md) | In-house CPU renderer with damage tracking and scroll blitting | Accepted |
 | [0025](0025-text-segmentation.md) | In-house Unicode text segmentation | Accepted |
+| [0026](0026-font-parsing-and-rasterization.md) | In-house OpenType parsing and glyph rasterization | Accepted |

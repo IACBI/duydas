@@ -32,9 +32,9 @@ In-house components, each with its own tests and an example to try:
 
 - `duydas-sys`: a Win32 window layer with keyboard and IME input, clipboard, per-monitor DPI, and presentation of only the changed areas. On Windows 11 its example shows the first frame 14 ms after `main` (median of 21 runs).
 - `duydas-render`: a CPU renderer that repaints only what changed and scrolls by moving pixels. In a headless replay of scrolling through 10,000 messages, p99 frame time is 1.5 ms at 1× and 2.5 ms at 2× (median of five runs; the budget is 16.7 ms). Text is still drawn with placeholder glyphs.
-- `duydas-text`: Unicode 18.0 grapheme clusters, word boundaries and line breaking with Japanese rules. It passes all 853 grapheme, 1,944 word and 19,346 line break cases of Unicode's conformance tests.
+- `duydas-text`: Unicode 18.0 grapheme clusters, word boundaries and line breaking with Japanese rules. It passes all 853 grapheme, 1,944 word and 19,346 line break cases of Unicode's conformance tests. It also parses TrueType and CFF fonts and rasterizes their glyphs: all 2,051,134 glyphs of the 415 font faces on the development machine load without an error.
 
-Next on the platform side ([ADR 0021](docs/adr/0021-in-house-implementation.md)): Wayland/X11 and Cocoa backends, fonts, text shaping and layout, and the in-house UI toolkit. Planned product features ([roadmap](docs/architecture.md#roadmap)): communities, channels and roles; message delivery that survives reconnects; voice channels; end-to-end encrypted direct messages; signed releases with verified updates.
+Next on the platform side ([ADR 0021](docs/adr/0021-in-house-implementation.md)): Wayland/X11 and Cocoa backends, text shaping, font fallback and layout, and the in-house UI toolkit. Planned product features ([roadmap](docs/architecture.md#roadmap)): communities, channels and roles; message delivery that survives reconnects; voice channels; end-to-end encrypted direct messages; signed releases with verified updates.
 
 ### Requirements
 
@@ -110,9 +110,9 @@ Kendi yazdığımız bileşenler (her birinin testleri ve deneyebileceğiniz bir
 
 - `duydas-sys`: Win32 pencere katmanı. Klavye ve IME girişini, panoyu ve monitöre göre DPI ölçeklendirmesini destekler; ekranda yalnızca değişen bölgeleri günceller. Windows 11'de örnek uygulamanın ilk karesi, `main` başladıktan 14 ms sonra ekrana geliyor (21 çalıştırmanın ortancası).
 - `duydas-render`: yalnızca değişen yerleri yeniden çizen, kaydırırken pikselleri taşıyan CPU çizim motoru. 10.000 mesajlık bir listede kaydırmayı pencere açmadan tekrarlayan ölçümde p99 kare süresi 1× ölçekte 1,5 ms, 2× ölçekte 2,5 ms (beş denemenin ortancası; hedef 16,7 ms). Metin şimdilik temsili gliflerle çiziliyor.
-- `duydas-text`: Unicode 18.0'a göre grafem kümelerini, sözcük sınırlarını ve Japonca satır bölme kurallarına göre satırın nerede bölünebileceğini bulur. Unicode'un uyumluluk testlerindeki 853 grafem, 1.944 sözcük ve 19.346 satır sonu örneğinin tamamını geçiyor.
+- `duydas-text`: Unicode 18.0'a göre grafem kümelerini, sözcük sınırlarını ve Japonca satır bölme kurallarına göre satırın nerede bölünebileceğini bulur. Unicode'un uyumluluk testlerindeki 853 grafem, 1.944 sözcük ve 19.346 satır sonu örneğinin tamamını geçiyor. TrueType ve CFF yazı tiplerini okuyup glifleri çiziyor; geliştirme makinesindeki 415 yazı tipindeki 2.051.134 glifin hepsi hatasız yükleniyor.
 
-Platform tarafında sırada ([ADR 0021](docs/adr/0021-in-house-implementation.md)) Wayland/X11 ve Cocoa desteği, yazı tipleri, metin şekillendirme ve yerleşim, ardından kendi arayüz katmanımız var. Planlanan özellikler ([yol haritası](docs/architecture.md#roadmap)): topluluklar, kanallar ve roller; bağlantı kopup geri geldiğinde mesaj kaybetmeyen iletim; sesli kanallar; uçtan uca şifreli özel mesajlar; imzalı sürümler ve doğrulanan güncellemeler.
+Platform tarafında sırada ([ADR 0021](docs/adr/0021-in-house-implementation.md)) Wayland/X11 ve Cocoa desteği, metin şekillendirme, yedek yazı tipi seçimi ve yerleşim, ardından kendi arayüz katmanımız var. Planlanan özellikler ([yol haritası](docs/architecture.md#roadmap)): topluluklar, kanallar ve roller; bağlantı kopup geri geldiğinde mesaj kaybetmeyen iletim; sesli kanallar; uçtan uca şifreli özel mesajlar; imzalı sürümler ve doğrulanan güncellemeler.
 
 ### Gereksinimler
 

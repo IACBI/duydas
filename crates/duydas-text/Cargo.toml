@@ -1,6 +1,6 @@
 [package]
 name = "duydas-text"
-description = "Text segmentation, shaping and layout for the in-house toolkit"
+description = "Text segmentation, fonts, shaping and layout for the in-house toolkit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
