@@ -39,6 +39,7 @@ Rendering the system fonts surfaced two facts that shape the font plan:
     - 2²⁰ points and components per TrueType glyph, with composites nested at most 8 deep;
     - 2²⁰ operators per CFF glyph, subroutines nested at most 10 deep, and a stack of 48;
     - 1 MiB of CFF Private DICTs per face, each parsed once however many font DICTs share it;
+    - 2²⁰ format 4 `cmap` segments checked per face, each subtable once however many encoding records share it, and only subtables that would outrank the one chosen so far;
     - images up to 8,192 px a side and 4,194,304 px, at sizes up to 4,096 px per em, reaching at most 2¹⁶ px from the pen, where `f32` pixel coordinates round by at most 1/256 px;
     - 2²⁴ steps of flattening and filling per glyph (each piece of a curve, and each pixel row and column an edge crosses), so a glyph that reuses a tall component or a flat curve many times cannot take billions of steps within the other limits.
 - **Character mapping.**
@@ -48,7 +49,7 @@ Rendering the system fonts surfaced two facts that shape the font plan:
 - **Metrics.**
   - Line metrics come from `OS/2`'s typographic values when the font sets USE_TYPO_METRICS, and from `hhea` otherwise, as browsers and FreeType do. If `hhea` has neither ascender nor descender, the typographic values are used, then the Windows ones, as in FreeType.
   - x-height, cap height, underline and strikeout come from `OS/2` and `post`.
-  - Weight, width, italic and monospace are kept for picking faces.
+  - Weight, width, italic and monospace are kept for picking faces. Without `OS/2`, weight follows `head`'s bold flag, as in FreeType.
   - Names (family, style, full, PostScript) prefer US English, then other English locales, then Unicode, then other Windows languages (in the Unicode or symbol encodings, both UTF-16), then Mac Roman, which is decoded with Apple's mapping.
 - **TrueType outlines.**
   - Simple glyphs follow the on- and off-curve rules: two off-curve points imply one halfway between them, and a contour may start off the curve.

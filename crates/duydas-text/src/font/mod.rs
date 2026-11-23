@@ -409,7 +409,8 @@ impl Font {
         let style = FontStyle {
             weight: getu(os2, 4)
                 .filter(|w| (1..=1000).contains(w))
-                .unwrap_or(400),
+                // Without one, FreeType goes by head's bold flag.
+                .unwrap_or(if mac_style & 1 != 0 { 700 } else { 400 }),
             width: getu(os2, 6).filter(|w| (1..=9).contains(w)).unwrap_or(5),
             italic: selection & (1 | 1 << 9) != 0 || mac_style & 2 != 0,
             monospace: post.and_then(|t| u32_at(t, 12)).is_some_and(|v| v != 0),

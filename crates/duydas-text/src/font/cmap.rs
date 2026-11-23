@@ -55,46 +55,61 @@ impl Cmap {
         }
         let mut offsets: Vec<usize> = records.iter().map(|&(_, _, o)| o).collect();
         offsets.sort_unstable();
+        offsets.dedup();
+        // Records often share a subtable: each is checked once, and the checks of all of them
+        // together are bounded.
+        let mut checked: Vec<Option<bool>> = vec![None; offsets.len()];
+        let mut budget = MAX_CHECKS;
         for &(platform, encoding, offset) in &records {
-            let after = offsets.partition_point(|&o| o <= offset);
-            let next = offsets.get(after).copied().unwrap_or(bytes.len());
+            let at = offsets.partition_point(|&o| o < offset);
+            let next = offsets.get(at + 1).copied().unwrap_or(bytes.len());
             let Some((format, span)) = subtable(bytes, offset, next) else {
                 continue;
             };
+            // Rank first, so only a subtable that would be used is checked.
+            let candidate = if format == 14 {
+                if variations.is_some() || (platform, encoding) != (0, 5) {
+                    continue;
+                }
+                None
+            } else {
+                let unicode = platform == 0 || (platform == 3 && matches!(encoding, 1 | 10));
+                let (score, encoding) = match (unicode, platform, encoding, format) {
+                    (true, _, _, 12) => (6, Encoding::Unicode),
+                    (true, _, _, 13) => (5, Encoding::Unicode),
+                    (true, _, _, 4) => (4, Encoding::Unicode),
+                    (true, _, _, 0 | 6) => (3, Encoding::Unicode),
+                    (false, 3, 0, _) => (2, Encoding::Symbol),
+                    (false, 1, 0, 0 | 6) => (1, Encoding::MacRoman),
+                    _ => continue,
+                };
+                if best.is_some_and(|(s, _)| score <= s) {
+                    continue;
+                }
+                Some((score, encoding))
+            };
             // A broken subtable must not displace a usable one of lower rank.
-            if !well_formed(span.of(bytes), format) {
+            let well_formed = *checked[at]
+                .get_or_insert_with(|| well_formed(span.of(bytes), format, &mut budget));
+            if !well_formed {
                 continue;
             }
             let span = Span {
                 start: table.start + span.start,
                 end: table.start + span.end,
             };
-            if format == 14 {
-                if platform == 0 && encoding == 5 {
-                    variations = Some(span);
-                }
+            let Some((score, encoding)) = candidate else {
+                variations = Some(span);
                 continue;
-            }
-            let unicode = platform == 0 || (platform == 3 && matches!(encoding, 1 | 10));
-            let (score, encoding) = match (unicode, platform, encoding, format) {
-                (true, _, _, 12) => (6, Encoding::Unicode),
-                (true, _, _, 13) => (5, Encoding::Unicode),
-                (true, _, _, 4) => (4, Encoding::Unicode),
-                (true, _, _, 0 | 6) => (3, Encoding::Unicode),
-                (false, 3, 0, _) => (2, Encoding::Symbol),
-                (false, 1, 0, 0 | 6) => (1, Encoding::MacRoman),
-                _ => continue,
             };
-            if best.is_none_or(|(s, _)| score > s) {
-                best = Some((
-                    score,
-                    Subtable {
-                        span,
-                        format,
-                        encoding,
-                    },
-                ));
-            }
+            best = Some((
+                score,
+                Subtable {
+                    span,
+                    format,
+                    encoding,
+                },
+            ));
         }
         Ok(Self {
             main: best.map(|(_, s)| s),
@@ -140,11 +155,21 @@ fn subtable(table: &[u8], offset: usize, next: usize) -> Option<(u16, Span)> {
     Some((format, Span { start: offset, end }))
 }
 
+/// How many format 4 segments a font's subtables may make `Cmap::parse` check in all: 32
+/// subtables of the largest size, where fonts have one or two.
+const MAX_CHECKS: usize = 1 << 20;
+
 /// Whether a subtable's header and arrays fit its extent, so lookups in it can succeed.
-fn well_formed(t: &[u8], format: u16) -> bool {
+/// `budget` is the number of format 4 segments left to check.
+fn well_formed(t: &[u8], format: u16, budget: &mut usize) -> bool {
     match format {
         0 => holds(t, 6, 256, 1),
         4 => u16_at(t, 6).is_some_and(|seg_x2| {
+            let segments = usize::from(seg_x2 / 2);
+            let Some(left) = budget.checked_sub(segments) else {
+                return false;
+            };
+            *budget = left;
             seg_x2 > 0
                 && seg_x2 % 2 == 0
                 && holds(t, 16, usize::from(seg_x2), 4)
@@ -331,4 +356,25 @@ fn variation(t: &[u8], c: u32, selector: u32) -> Option<Variation> {
         }
     }
     Some(Variation::Missing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::well_formed;
+
+    #[test]
+    fn format_4_checks_draw_on_a_budget() {
+        // Two segments, the second the closing 0xFFFF one, with no glyph arrays: the header,
+        // then the ends, padding, starts, deltas and range offsets.
+        let words: [u16; 16] = [
+            4, 32, 0, 4, 4, 1, 0, 0x41, 0xFFFF, 0, 0x41, 0xFFFF, 0, 1, 0, 0,
+        ];
+        let t: Vec<u8> = words.iter().flat_map(|w| w.to_be_bytes()).collect();
+        let mut budget = 1;
+        assert!(!well_formed(&t, 4, &mut budget));
+        assert_eq!(budget, 1);
+        let mut budget = 2;
+        assert!(well_formed(&t, 4, &mut budget));
+        assert_eq!(budget, 0);
+    }
 }

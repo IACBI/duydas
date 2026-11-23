@@ -1083,6 +1083,27 @@ fn glyph_counts_match_the_outlines_and_metrics_are_required() {
 }
 
 #[test]
+fn weight_without_os2_follows_the_bold_flag() {
+    let glyphs = [Vec::new(), simple_glyph(&[SQUARE])];
+    let (glyf, loca) = glyf_loca(&glyphs, false);
+    let mut bold_head = head(1000, false);
+    bold_head[44..46].copy_from_slice(&1u16.to_be_bytes());
+    let font = parse(sfnt(
+        &[0, 1, 0, 0],
+        &[
+            (b"cmap", glyf_cmap()),
+            (b"glyf", glyf),
+            (b"head", bold_head),
+            (b"hhea", hhea(800, -200, 0, 1)),
+            (b"hmtx", hmtx(&[500], 2)),
+            (b"loca", loca),
+            (b"maxp", maxp(2)),
+        ],
+    ));
+    assert_eq!(font.style().weight, 700);
+}
+
+#[test]
 fn bitmap_only_fonts_are_unsupported() {
     // Apple's bitmap fonts have `bhed` in place of `head`; others have `head` and `EBDT`.
     let apple = sfnt(
