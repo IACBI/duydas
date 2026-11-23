@@ -32,10 +32,11 @@ This document is the map. Decisions and their reasoning live in [`adr/`](adr/REA
 | `duydas-client` | Headless SDK: connection, outbox, cache, sync. | Phase 1 |
 | `duydas-voice` | Audio pipeline and WebRTC transport. | Phase 4 (spike in Phase 0) |
 | `duydas-render` | CPU renderer: canvas, display list, rasterizers, damage tracking and scroll blitting. No dependencies, no `unsafe` (ADR 0024). | Complete for step 3; not yet used by the app |
+| `duydas-text` | Text stack: Unicode segmentation (grapheme clusters, words, line breaking with Japanese rules); fonts, shaping and layout to come. No dependencies, no `unsafe` (ADR 0025). | Segmentation (Unicode 18.0) |
 | `duydas-ui` | Design tokens, theme, custom widgets. | Tokens + theme |
 | `apps/duydas-desktop` | The Iced application. | Phase 0 shell |
 | `apps/duydas-server` | Self-hostable server binary. | Phase 1 |
-| `xtask` | `i18n-check`, `perf`, benchmarks, later `proto-gen` and release helpers. | i18n-check, perf, vlist, render-bench |
+| `xtask` | `i18n-check`, `perf`, benchmarks, later `proto-gen` and release helpers. | i18n-check, perf, vlist, render-bench, unicode-gen |
 
 ## Key invariants
 
