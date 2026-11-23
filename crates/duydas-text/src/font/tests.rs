@@ -1083,6 +1083,32 @@ fn glyph_counts_match_the_outlines_and_metrics_are_required() {
 }
 
 #[test]
+fn bitmap_only_fonts_are_unsupported() {
+    // Apple's bitmap fonts have `bhed` in place of `head`; others have `head` and `EBDT`.
+    let apple = sfnt(
+        &[0, 1, 0, 0],
+        &[(b"bdat", vec![0; 8]), (b"bhed", head(1000, false))],
+    );
+    let embedded = sfnt(
+        &[0, 1, 0, 0],
+        &[
+            (b"EBDT", vec![0; 8]),
+            (b"cmap", glyf_cmap()),
+            (b"head", head(1000, false)),
+            (b"hhea", hhea(800, -200, 0, 1)),
+            (b"hmtx", hmtx(&[500], 1)),
+            (b"maxp", maxp(1)),
+        ],
+    );
+    for data in [apple, embedded] {
+        assert_eq!(
+            Font::from_data(data, 0).err(),
+            Some(FontError::Unsupported("bitmap-only font"))
+        );
+    }
+}
+
+#[test]
 fn rasterizing_bounds_the_work_per_glyph() {
     // A 1 × 8,000 unit bar, then three levels of composites each using the level below 59
     // times in place: glyph 4 is 205,379 bars on top of each other. Each bar is cheap and the
@@ -2109,20 +2135,32 @@ fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// A simple glyph's header box and the box around its decoded points.
-fn header_and_point_box(font: &Font, glyph: GlyphId) -> Option<([f32; 4], [f32; 4])> {
+/// Checks a simple glyph's header box against its decoded points. The specification asks for
+/// the box around every point, but tools record others: FontForge the box of the cubic outline
+/// it converted from, which lies inside the points' box, and some icon font tools a box from
+/// the origin. All of them contain the explicit on-curve points, which lie on every version of
+/// the outline, give or take a unit of rounding; decoding errors in signs, flags or offsets
+/// move those points outside it. Returns a description, whether the header is exactly the
+/// points' box, and whether it contains the on-curve points.
+fn header_box(font: &Font, glyph: GlyphId) -> Option<(String, bool, bool)> {
     let Outlines::Glyf(glyf) = &font.outlines else {
         return None;
     };
     let bytes = glyf.bytes(&font.data, glyph.0).ok()?;
     let value = |at| reader::i16_at(bytes, at).map(f32::from);
-    let header = [value(2)?, value(4)?, value(6)?, value(8)?];
-    Some((header, glyf.point_box(&font.data, glyph.0)?))
+    let h = [value(2)?, value(4)?, value(6)?, value(8)?];
+    let (all, on) = glyf.boxes(&font.data, glyph.0)?;
+    // A glyph drawn with off-curve points alone, such as a circle, has none to check.
+    let contains_on_curve = on.is_none_or(|on| {
+        on[0] >= h[0] - 1.0 && on[1] >= h[1] - 1.0 && on[2] <= h[2] + 1.0 && on[3] <= h[3] + 1.0
+    });
+    let description = format!("header {h:?}, points {all:?}, on-curve points {on:?}");
+    Some((description, h == all, contains_on_curve))
 }
 
 /// Parses every installed font and outlines and rasterizes a sample of each one's glyphs
-/// (all of them with `DUYDAS_FONT_FULL` set). A simple TrueType glyph's outline must span
-/// exactly the box its header records.
+/// (all of them with `DUYDAS_FONT_FULL` set). Every simple TrueType glyph's points must agree
+/// with the box its header records, as `header_box` describes.
 #[test]
 fn installed_fonts_parse_and_rasterize() {
     let full = std::env::var_os("DUYDAS_FONT_FULL").is_some();
@@ -2134,7 +2172,7 @@ fn installed_fonts_parse_and_rasterize() {
     let mut rasterizer = Rasterizer::new();
     let mut failures = Vec::new();
     let (mut faces, mut glyphs, mut unsupported_faces, mut unsupported_glyphs) = (0, 0, 0, 0);
-    let (mut boxes, mut box_mismatches, mut tool_boxes) = (0, Vec::new(), Vec::new());
+    let (mut boxes, mut implausible, mut tool_boxes) = (0, Vec::new(), 0);
     for path in &files {
         let Ok(bytes) = std::fs::read(path) else {
             continue;
@@ -2156,7 +2194,7 @@ fn installed_fonts_parse_and_rasterize() {
                 }
             };
             faces += 1;
-            let (mut checked, mut differing) = (0usize, Vec::new());
+            let mut inexact_face = false;
             let n = font.glyph_count();
             let step = if full { 1 } else { usize::from(n / 48).max(1) };
             for g in (0..n).step_by(step) {
@@ -2164,12 +2202,12 @@ fn installed_fonts_parse_and_rasterize() {
                 glyphs += 1;
                 match font.bounds(glyph) {
                     Ok(_) => {
-                        if let Some((header, points)) = header_and_point_box(&font, glyph) {
+                        if let Some((description, exact, plausible)) = header_box(&font, glyph) {
                             boxes += 1;
-                            checked += 1;
-                            if points != header {
-                                differing.push(format!(
-                                    "{}:{index} glyph {g}: points {points:?} vs header {header:?}",
+                            inexact_face |= !exact;
+                            if !plausible {
+                                implausible.push(format!(
+                                    "{}:{index} glyph {g}: {description}",
                                     path.display()
                                 ));
                             }
@@ -2197,25 +2235,16 @@ fn installed_fonts_parse_and_rasterize() {
                     }
                 }
             }
-            // Font tools that compute boxes from an unrounded or differently built outline get
-            // many of them wrong; a face that otherwise follows the specification points to a
-            // decoding error.
-            if differing.len() * 100 <= checked {
-                box_mismatches.extend(differing);
-            } else {
-                tool_boxes.push(format!("{}:{index}", path.display()));
-            }
+            tool_boxes += usize::from(inexact_face);
         }
     }
     eprintln!(
         "{} files, {faces} faces ({unsupported_faces} unsupported), {glyphs} glyphs ({unsupported_glyphs} \
-         unsupported), {boxes} simple glyph boxes ({} differ), {} faces with boxes not by the specification",
+         unsupported), {boxes} simple glyph boxes ({} implausible), {tool_boxes} faces with boxes \
+         not exactly by the specification",
         files.len(),
-        box_mismatches.len(),
-        tool_boxes.len()
+        implausible.len(),
     );
     assert!(failures.is_empty(), "{failures:#?}");
-    assert!(box_mismatches.is_empty(), "{box_mismatches:#?}");
-    // Widespread disagreement would be a decoding error, not a few unusual font tools.
-    assert!(tool_boxes.len() * 20 <= faces, "{tool_boxes:#?}");
+    assert!(implausible.is_empty(), "{implausible:#?}");
 }

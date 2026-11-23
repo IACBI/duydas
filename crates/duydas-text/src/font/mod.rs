@@ -196,7 +196,8 @@ impl Tables {
                 b"post" => &mut t.post,
                 b"name" => &mut t.name,
                 b"fvar" => &mut t.fvar,
-                b"CBDT" | b"EBDT" | b"sbix" => {
+                // Apple's bitmap-only fonts have `bhed` in place of `head`.
+                b"CBDT" | b"EBDT" | b"sbix" | b"bdat" | b"bhed" => {
                     t.bitmaps = true;
                     continue;
                 }
@@ -254,6 +255,9 @@ impl Font {
         let t = Tables::read(&data, offset)?;
         let required = |span: Option<Span>, name| span.ok_or(FontError::MissingTable(name));
 
+        if t.head.is_none() && t.bitmaps {
+            return Err(FontError::Unsupported("bitmap-only font"));
+        }
         let head = required(t.head, "head")?.of(&data);
         if head.len() < 54 {
             return Err(FontError::Malformed("head"));

@@ -44,19 +44,23 @@ impl Glyf {
         self.glyf.of(data).get(start..end).ok_or(MALFORMED)
     }
 
-    /// The box around every point of a simple glyph, including single-point contours that
-    /// draw nothing, as its header should record it.
+    /// A simple glyph's boxes around every point (including single-point contours that draw
+    /// nothing), as its header should record it, and around its explicit on-curve points, if
+    /// it has any.
     #[cfg(test)]
-    pub(super) fn point_box(&self, data: &[u8], glyph: u16) -> Option<[f32; 4]> {
+    pub(super) fn boxes(&self, data: &[u8], glyph: u16) -> Option<([f32; 4], Option<[f32; 4]>)> {
+        fn grow(b: Option<[f32; 4]>, p: &Point) -> Option<[f32; 4]> {
+            Some(b.map_or([p.x, p.y, p.x, p.y], |[a, c, d, e]| {
+                [a.min(p.x), c.min(p.y), d.max(p.x), e.max(p.y)]
+            }))
+        }
         let mut r = Reader::new(self.bytes(data, glyph).ok()?);
         let contours = usize::try_from(r.i16()?).ok().filter(|&n| n > 0)?;
         r.skip(8)?;
         let (_, points) = decode(&mut r, contours, &mut MAX_POINTS.clone()).ok()?;
-        points.iter().fold(None, |b: Option<[f32; 4]>, p| {
-            Some(b.map_or([p.x, p.y, p.x, p.y], |[a, b, c, d]| {
-                [a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)]
-            }))
-        })
+        let all = points.iter().fold(None, grow)?;
+        let on = points.iter().filter(|p| p.on).fold(None, grow);
+        Some((all, on))
     }
 
     /// The left edge of the glyph's box as its header records it, which with the left side

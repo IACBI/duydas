@@ -71,7 +71,7 @@ Rendering the system fonts surfaced two facts that shape the font plan:
   - color glyphs (`COLR`/`CPAL`, `sbix`, `CBDT`) and bitmap strikes;
   - hinting.
 
-  CFF2 and bitmap-only fonts fail with `Unsupported`, and fonts with no outlines at all with `MissingTable`.
+  CFF2 and bitmap-only fonts (Apple's among them, with `bhed` in place of `head`) fail with `Unsupported`, and fonts with no outlines at all with `MissingTable`.
 
 ## Verification
 
@@ -81,7 +81,7 @@ Rendering the system fonts surfaced two facts that shape the font plan:
   - collections, including a collection index whose offset would overflow 32 bits;
   - CFF path, hint, subroutine and flex operators, charstrings without `endchar`, subroutines without `return` and a `return` outside one, movetos with extra operands, 1,024 steps of 1/65,536 that add up, an oblique FontMatrix, CID font DICT matrices with and without a scale of their own, the top DICT's translation dropped under a font DICT matrix (a unit test of the matrix arithmetic), CharStrings offsets that point outside their INDEX, and a Private DICT shared by font DICTs (parsed once) or past the budget;
   - a CID-keyed CFF whose glyphs use different font DICTs;
-  - glyph counts limited by the outline table, short `hmtx` tables, metric fallbacks (including a Windows descent of 32,768), and Mac Roman, British English and symbol-encoded names.
+  - bitmap-only fonts, glyph counts limited by the outline table, short `hmtx` tables, metric fallbacks (including a Windows descent of 32,768), and Mac Roman, British English and symbol-encoded names.
 - **Rasterization tests:**
   - pixel-aligned squares are covered exactly, and moved half a pixel, their edge columns are half covered;
   - a hole wound the other way stays empty, a contour drawn twice covers once, and two squares wound in opposite directions that share one pixel cancel, as documented above;
@@ -95,7 +95,12 @@ Rendering the system fonts surfaced two facts that shape the font plan:
   - With `DUYDAS_FONT_FULL` set, it covers every glyph. On the development machine:
     - 415 faces and 2,051,134 glyphs, with Acrobat's CFF fonts added through `DUYDAS_FONT_DIRS`;
     - no errors, no unsupported glyphs.
-  - For 1,847,275 simple TrueType glyphs, the box around the decoded points equals the box in the glyph's header exactly. Nine icon web fonts are the exception: their tools compute boxes from unrounded outlines. The test fails if a face has differing boxes in 1% of its glyphs or fewer, which would point to a decoding error. A face with more is counted as one whose tool computed boxes its own way, and the test fails if more than 5% of faces are.
+  - Each simple TrueType glyph's decoded points are checked against the box in its header:
+    - The specification asks for the box around all the points. In 406 of the 415 faces, every header is exactly that.
+    - Tools record other boxes too. The other nine faces, icon web fonts, write their own (codicon's start at the origin). FontForge, which builds the DejaVu and Liberation fonts on CI's Linux runner, writes the box of the cubic outline it converted from.
+    - Every one of these boxes contains the glyph's explicit on-curve points, give or take a unit, because those lie on every version of the outline. The test requires that of all 1,847,275 glyphs.
+    - Decoding errors move those points out. With the sign of short coordinates flipped, 97% of sampled boxes fail; with an off-by-one, 72%.
+    - The 22 DejaVu faces, fetched separately, pass the same check in all 92,956 glyphs.
 - **By eye.** The `specimen` example draws Turkish, Japanese and English text in Segoe UI, Yu Gothic, Meiryo, Noto Sans JP, Consolas, Times New Roman and Minion Pro (CFF).
 - **Independent review.** Four rounds of Codex review found 17 issues, then 15 more (11 in the code, 4 claims in this record that said more than the code does), then 14 and 5 narrower ones. They are fixed and tested as described above, with these exceptions:
   - the coverage rule is kept and documented;
