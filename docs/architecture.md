@@ -34,7 +34,7 @@ This is the planned shape: application boundaries and protocols, not current beh
 | `duydas-client` | Headless SDK: connection, outbox, cache, sync. | Documentation stub; Phase 1 |
 | `duydas-voice` | Audio pipeline and WebRTC transport. | Documentation stub; audio spike pending (ADR 0019), voice in Phase 4 |
 | `duydas-render` | CPU renderer: canvas, display list, rasterizers, damage tracking and scroll blitting. No runtime dependencies, no `unsafe` (ADR 0024). | Step 3 done, exercised by the `scroll` example (which uses `duydas-sys` as a dev-dependency); the app still draws with Iced |
-| `duydas-text` | Text stack: Unicode segmentation (grapheme clusters, words, line breaking with Japanese rules); fonts, shaping and layout to come. No dependencies, no `unsafe` (ADR 0025). | Segmentation (Unicode 18.0), standalone; fonts, shaping, layout and app integration planned |
+| `duydas-text` | Text stack: Unicode segmentation (grapheme clusters, words, line breaking with Japanese rules), OpenType parsing and glyph rasterization; shaping, font fallback and layout to come. No dependencies, no `unsafe` (ADR 0025, 0026). | Segmentation (Unicode 18.0) and fonts (TrueType and CFF outlines, coverage masks), standalone; shaping, fallback, layout and app integration planned |
 | `duydas-ui` | Design tokens, theme, custom widgets. | Tokens, Iced theme and the `virtual_list` prototype |
 | `apps/duydas-desktop` | The Iced application. | Phase 0 shell |
 | `apps/duydas-server` | Self-hostable server binary. | Stub that prints a notice; Phase 1 |

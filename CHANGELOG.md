@@ -35,6 +35,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `cargo xtask render-bench`: replays the ADR 0018 scrolling session on the new renderer and checks the budget. Headless with synthetic glyphs, median p99 over five runs with damage tracking is 1.5 ms at 1× and 2.5 ms at 2× (budget: 16.7 ms), with no stalls over 50 ms.
 - `duydas-text`: in-house Unicode 18.0 text segmentation (ADR 0025), with no dependencies and no `unsafe`. It finds grapheme clusters, word boundaries, and line break opportunities that follow the Japanese line-breaking rules, with a strict and a loose mode for small kana. It passes Unicode 18.0's grapheme, word and line break conformance tests.
 - `cargo xtask unicode-gen`: regenerates `duydas-text`'s tables and conformance data from the Unicode Character Database.
+- `duydas-text::font`: in-house OpenType parsing and glyph rasterization (ADR 0026), with no dependencies and no `unsafe`. It reads TrueType and CFF outlines (CID-keyed included) from fonts and collections, character maps with Japanese variation sequences, metrics and names, and turns glyphs into anti-aliased coverage masks for `duydas-render`. Malformed fonts fail with an error, with the work per glyph bounded. It reads all 2,051,134 glyphs of 415 installed faces without an error, and rasterizes a glyph in 3–16 µs at 12–48 px.
 
 ### Changed
 

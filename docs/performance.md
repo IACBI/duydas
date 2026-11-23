@@ -113,3 +113,15 @@ Text uses synthetic glyph masks, so shaping and glyph rasterization are not meas
 | One cursor step through emoji, Hangul syllables or Devanagari letters with nukta | 25–40 ns |
 
 This covers segmentation only; shaping and layout come later. Details: [ADR 0025](adr/0025-text-segmentation.md).
+
+## Baseline: font parsing and glyph rasterization (2026-11-23)
+
+`cargo run --release -p duydas-text --example font_bench` parses each font, looks up the characters of mixed Turkish, Japanese and English text, and rasterizes every glyph of the font once with a quarter-pixel offset. Same machine as above, ranges over five runs, time per glyph with ink:
+
+| Font | Glyphs | `glyph_index` | 12 px | 16 px | 24 px | 48 px |
+|---|---|---|---|---|---|---|
+| Segoe UI (TrueType) | 5,395 | 14–16 ns | 3.3–3.4 µs | 3.5–3.7 µs | 4.1–4.3 µs | 6.2–6.7 µs |
+| Yu Gothic Medium (TrueType, collection) | 24,411 | 25–39 ns | 8.3–8.4 µs | 9.1–9.5 µs | 10.4–11.4 µs | 15.4–16.3 µs |
+| Minion Pro (CFF) | 1,686 | 14–15 ns | 3.5–3.6 µs | 3.9–4.1 µs | 4.7–4.8 µs | 7.2–8.5 µs |
+
+Parsing a face takes 1–13 µs. Once glyphs are cached (the cache is still to come), a screen with 2,000 distinct glyphs at 12–16 px would cost an estimated 7–19 ms the first time it appears. Shaping and layout come later. Details: [ADR 0026](adr/0026-font-parsing-and-rasterization.md).
