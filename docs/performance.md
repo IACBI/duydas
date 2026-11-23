@@ -4,10 +4,10 @@ Budgets are **provisional** until every Phase 0 baseline is in. After that they 
 
 ## Measurement markers
 
-- `launch`: process spawn, measured by `cargo xtask perf` from outside the app.
-- `first_redraw`: the app prints `duydas-perf first_redraw_ms=…` on its first `RedrawRequested` when `DUYDAS_PERF=1` is set. Iced emits that event just before presenting, so it marks the first frame attempt; confirming the actual present needs renderer instrumentation (planned with the Phase 1 perf gate).
+- `launch`: `cargo xtask perf` starts its clock just before spawning the app, and stops it when it reads the first-redraw marker on the app's stdout.
+- `first_redraw`: when `DUYDAS_PERF` is set (the runner sets it to `1`), the app prints `duydas-perf first_redraw_ms=…` when it receives the first `RedrawRequested`, whose timestamp Iced takes at the start of the redraw. It marks the first frame attempt; confirming the actual present needs renderer instrumentation (planned with the Phase 1 perf gate).
 - `interactive`: cached channel visible and composer focusable (Phase 1, once there is real content).
-- Memory: Windows private bytes and working set, macOS `phys_footprint` (via `footprint`), Linux PSS. GPU driver allocations count toward Windows private bytes, so renderer choice dominates that number (see baseline below).
+- Memory: the runner reports Windows private bytes and working set, Linux PSS, and macOS RSS. Measure macOS `phys_footprint` separately with `footprint`. GPU driver allocations count toward Windows private bytes, so renderer choice dominates that number (see baseline below).
 
 ## Budgets
 
@@ -43,15 +43,23 @@ Binary size: 9.0 MB (both renderers compiled in).
 Findings, recorded in [ADR 0017](adr/0017-spike-renderer-baseline.md):
 
 1. The wgpu path misses the startup and memory budgets on this machine, and Iced 0.14 asks for the **high-performance** GPU by default, which wakes the discrete GPU on laptops. A chat app should never do that.
-2. The CPU renderer is about 10× faster to first frame and an order of magnitude smaller, **but it fails the scrolling budget** (next section). The default is therefore wgpu on the low-power adapter, with DX12 on Windows (83 MB private in a same-session comparison, against 126 MB for wgpu's default backend). Startup remains open; see ADR 0017.
+2. The CPU renderer is about 10× faster to first frame and an order of magnitude smaller, **but it fails the scrolling budget** (next section). ADR 0017 therefore recommends wgpu on the low-power adapter, with DX12 on Windows (83 MB private in a same-session comparison, against 126 MB for wgpu's default backend). The app does not select this itself: it uses Iced's defaults unless the environment overrides them. Startup remains open; see ADR 0017. The in-house CPU renderer (ADR 0024, below) is measured separately.
 
-Reproduce:
+Reproduce in a POSIX shell:
 
 ```sh
 cargo xtask perf --runs 5
 ICED_BACKEND=tiny-skia cargo xtask perf --runs 5
 WGPU_POWER_PREF=low cargo xtask perf --runs 5
 WGPU_POWER_PREF=low WGPU_BACKEND=dx12 cargo xtask perf --runs 5
+```
+
+In PowerShell, set the variables first and remove them between variants:
+
+```powershell
+$env:WGPU_POWER_PREF = 'low'; $env:WGPU_BACKEND = 'dx12'
+cargo xtask perf --runs 5
+Remove-Item Env:WGPU_POWER_PREF, Env:WGPU_BACKEND
 ```
 
 ## Baseline: scrolling 10k messages (2026-11-22)
@@ -74,21 +82,34 @@ Details and the design findings behind these numbers are in [ADR 0018](adr/0018-
 |---|---|---|
 | `main` → first successful present, p50 / p95 of 21 runs | `-- --first-frame` | 14 ms / 16 ms |
 | One present: full frame / one 48×48 damage rectangle | `-- --present-bench` | about 1.7 ms / 30 µs |
-| Private bytes / working set | `-- --idle 6` | 5.8 MB / 14.2 MB |
-| CPU used over a 3 s idle sample | `-- --idle 6` | 0.0 ms |
+| Private bytes / working set, sampled from outside while idle | `-- --idle 6` | 5.8 MB / 14.2 MB |
+| CPU used over a 3 s idle sample, sampled from outside | `-- --idle 6` | 0.0 ms |
 | Events while idle | `-- --idle 6` | none after the focus and paint that follow showing |
 
 Run with `cargo run --release -p duydas-sys --example window -- <flag>`. The in-process clock starts at `main`, while the Iced baseline above starts at process spawn, so the two are not comparable. Design and caveats: [ADR 0023](adr/0023-platform-layer.md).
 
 ## Baseline: in-house CPU renderer (2026-11-22)
 
-`cargo xtask render-bench` runs `crates/duydas-render/examples/scroll`, which replays the ADR 0018 session (same corpus and script) through `duydas-render`. It checks the damage-tracking runs against the scrolling budget and fails if either misses it; full redraws are printed for comparison. Same machine as above, five runs, release build, headless. A frame is building the scene plus rendering it.
+`cargo xtask render-bench` runs `crates/duydas-render/examples/scroll`, which replays the ADR 0018 session (same corpus and script) through `duydas-render`. It requires a valid run in all four configurations, checks only the damage-tracking runs against the scrolling budget, and prints full redraws for comparison. Percentiles use the steady-scroll frames; the stall count covers scrolling, history prepends, jumps and resizes. The first frame is timed separately. Same machine as above, five runs, release build, headless. A frame is building the scene plus rendering it.
 
-| Mode | Scale | p99: median (range) | Worst frame | Stalls &gt; 50 ms |
+| Mode | Scale | p99: median (range) | Worst frame | Stalls > 50 ms |
 |---|---|---|---|---|
 | Damage tracking | 1× / 2× | 1.5 ms (0.9–3.0) / 2.5 ms (2.0–7.7) | 14.8 / 41.6 ms | 0 / 0 |
-| Full redraw | 1× / 2× | 1.8 ms (1.5–3.2) / 7.2 ms (6.5–11.8) | 5.7 / 54 ms | 0 / 1 run of 5 |
+| Full redraw | 1× / 2× | 1.8 ms (1.5–3.2) / 7.2 ms (6.5–11.8) | 5.7 / 54 ms | 0 / 1 run of 5 (a resize) |
 
 In a real window (`--window`, presented through `duydas-sys`, 1125 × 875 physical pixels at 125%), damage tracking measured p99 2.5 ms at 1× and 1.9 ms at 2× layout scale, presents included, with no stalls.
 
 Text uses synthetic glyph masks, so shaping and glyph rasterization are not measured yet; the numbers do not compare one-to-one with the Iced runs above. Details: [ADR 0024](adr/0024-cpu-renderer.md).
+
+## Baseline: Unicode segmentation (2026-11-23)
+
+`cargo run --release -p duydas-text --example bench` runs `duydas-text` over 4 MB of mixed Turkish, Japanese and English chat text. Same machine as above, ranges over six runs:
+
+| Operation | Result |
+|---|---|
+| Grapheme clusters | 141–156 MB/s |
+| Words | 70–79 MB/s |
+| Line break opportunities, either strictness | 60–76 MB/s |
+| One cursor step through emoji, Hangul syllables or Devanagari letters with nukta | 25–40 ns |
+
+This covers segmentation only; shaping and layout come later. Details: [ADR 0025](adr/0025-text-segmentation.md).

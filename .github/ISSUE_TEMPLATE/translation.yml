@@ -1,6 +1,6 @@
 name: Translation issue
 description: A string is wrong, awkward, truncated or untranslated.
-labels: ["area: i18n", "status: triage"]
+labels: ["type: bug", "area: i18n", "status: triage"]
 body:
   - type: dropdown
     id: language

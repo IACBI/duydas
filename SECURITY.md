@@ -15,7 +15,7 @@ What to expect:
 
 ## Supported versions
 
-Duydaş is pre-release (0.x). Only the latest commit on `main` receives security fixes until the first stable release; this table will list supported release lines after that.
+Duydaş is pre-release (0.x). Until the first stable release, security fixes go to the latest commit on `main`. Supported release lines will be listed here once they exist.
 
 ## Scope
 
@@ -25,4 +25,4 @@ Out of scope: vulnerabilities in self-hosted deployments caused by configuration
 
 ## Handling secrets in this repository
 
-No credentials, tokens or signing keys belong in this repository. Secret scanning with push protection is enabled. Release signing keys live only in protected GitHub Environments that require maintainer approval.
+No credentials, tokens or signing keys belong in this repository. Secret scanning with push protection is enabled. There are no releases yet. Before the first signed release, signing credentials used by CI will move into protected GitHub Environments that require maintainer approval; the update metadata root key stays offline. See [the release plan](docs/release.md).

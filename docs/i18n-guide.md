@@ -7,8 +7,8 @@ Duydaş launches in **English (en-US)**, **Turkish (tr-TR)** and **Japanese (ja-
 - Messages are [Fluent](https://projectfluent.org/) files in `locales/<tag>/`, one file per feature area (`common.ftl`, `chat.ftl`, `settings.ftl`, …).
 - The build generates a `Key` enum from `locales/en-US`, so code refers to `Key::ComposerPlaceholder` instead of a string id. A typo is a compile error.
 - All locales are embedded in the binary. Switching language builds a new `Localizer` and the UI redraws; no restart and no file I/O.
-- The UI language follows the operating system (`tr`, `tr-CY` → tr-TR; `ja` → ja-JP; anything unsupported → en-US) until the user picks one.
-- A message missing in a translation falls back to en-US for that message only. Release builds must have no fallbacks; `cargo xtask i18n-check` and the test suite enforce it.
+- At startup the app goes through the operating system's language preferences in order and takes the first supported one (`tr`, `tr-CY` → tr-TR; `ja` → ja-JP), or en-US if none match. The picker changes the language for the current session.
+- A message that is missing or fails to resolve falls back to en-US for that message only. Releases must have no fallbacks: `cargo xtask i18n-check` checks message coverage and variables, and the tests check that every shipped locale has every key.
 
 ## Adding or changing UI text (developers)
 
@@ -22,7 +22,7 @@ Duydaş launches in **English (en-US)**, **Turkish (tr-TR)** and **Japanese (ja-
    ```
 
 2. Use it: `l10n.tr_args(Key::ComposerPlaceholder, &args!(channel = name))`.
-3. Add tr-TR and ja-JP translations, or say in the PR that they are needed.
+3. Add the tr-TR and ja-JP translations before the PR is merged.
 4. Run `cargo xtask i18n-check`.
 
 Rules:
@@ -32,7 +32,7 @@ Rules:
 - Format dates with `l10n.format_date`, never by hand.
 - Uppercase with `l10n.uppercase`. `str::to_uppercase` turns Turkish `i` into `I` instead of `İ`.
 - Don't inflect the product name inside Turkish sentences (`Duydaş'a`); phrase around it.
-- Limits on user input count grapheme clusters, not bytes or `char`s.
+- Limits on user input count grapheme clusters, not bytes or `char`s. `duydas-text` provides the segmentation; the current shell has no input limits yet.
 
 ## Translating (no Rust needed)
 
@@ -43,7 +43,7 @@ Rules:
 
 ## Adding a language
 
-Open a [new language issue](https://github.com/IACBI/duydas/issues/new?template=new_language.yml), then add `locales/<tag>/` with all files, add the variant to `UiLocale` in `crates/duydas-i18n/src/locale.rs`, and add the language's CLDR rules (plural categories, grouping separator, long date pattern and month names, any casing rules) to `crates/duydas-i18n/src/format.rs` with tests.
+Open a [new language issue](https://github.com/IACBI/duydas/issues/new?template=new_language.yml), then add `locales/<tag>/` with all files. In `crates/duydas-i18n/src/locale.rs`, add the `UiLocale` variant and its `SHIPPED` entry, and update the tag lookup, autonym, negotiation and the `UiLocale::lang()` mapping (adding a `Lang` variant in `format.rs` if needed). Then add the language's CLDR rules (plural categories, grouping separator, long date pattern and month names, any casing rules) to `crates/duydas-i18n/src/format.rs` with tests.
 
 ## Text input (IME) test matrix
 
@@ -64,12 +64,12 @@ Also check:
 - switching UI language during a composition;
 - closing the window while dragging its border.
 
-For the in-house window layer (ADR 0023), run `cargo run -p duydas-sys --example window`. Its title bar shows the preedit in brackets and the committed text.
+For the in-house window layer (ADR 0023), run `cargo run -p duydas-sys --example window` on Windows 10 version 1703 or later. It has no composer, so check that the preedit appears in brackets in the title bar, the candidate window follows the caret area, and Enter commits the text once. Also move the window between monitors with different scaling during a composition, and close it while resizing.
 
 ## Fonts
 
-Japanese text needs Japanese glyph forms. cosmic-text picks its Han fallback font from the system locale, so on an English system kanji can render with Chinese shapes. Bundling a Noto Sans JP subset and ordering fonts by UI language is planned; see [ADR 0015](adr/0015-spike-text-and-ime.md).
+Japanese text needs Japanese glyph forms. cosmic-text picks its Han fallback font from the system locale, so on an English system kanji can render with Chinese shapes. [ADR 0015](adr/0015-spike-text-and-ime.md) records the issue. The in-house text stack (ADR 0021 step 4) will handle font fallback, with Japanese glyph forms preferred.
 
 ## Supported syntax
 
-Duydaş parses FTL itself (ADR 0022). It supports messages, terms, attributes, comments, multiline text, variables, message and term references, string and number literals, and select expressions (plural categories and exact numbers such as `[0]`). It does not support functions such as `NUMBER()` or parameterized terms; the code passes values in already formatted, e.g. `$countText` next to `$count`. Unsupported syntax fails `cargo xtask i18n-check` with a line and column.
+Duydaş parses FTL itself (ADR 0022). It supports messages, terms, attributes, comments, multiline text, variables, message and term references, string and number literals, and select expressions (plural categories and exact numbers such as `[0]`). It does not support functions such as `NUMBER()` or parameterized terms; the code passes values in already formatted, e.g. `$countText` next to `$count`. Unsupported syntax fails the build with the file, line and column; `cargo xtask i18n-check` adds the checks across locales.

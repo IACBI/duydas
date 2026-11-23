@@ -24,13 +24,14 @@ Account credentials and sessions; message content; who-talks-to-whom metadata; v
 | Voice in DM calls (Phase 5) | DTLS-SRTP + SFrame | Not stored | No |
 | Attachments | TLS 1.3 | Stored as uploaded | Yes (community), No (E2EE DMs) |
 | Metadata (who, when, which channel) | TLS 1.3 | Stored | Yes. Minimised, but not hidden |
-| Session tokens | TLS 1.3 | SHA-256 hashes only | No |
-| Local cache | — | OS-protected profile directory; encryption decided before E2EE ships | — |
+| Session tokens | TLS 1.3 | SHA-256 hashes only | Sees presented tokens to validate them; does not store them |
 
-## Key decisions so far
+Client cache (target): an OS-protected profile directory. Encryption and backup policy are decided before E2EE ships.
+
+## Planned controls
 
 - Short-lived access tokens (15 min) and rotating refresh tokens with reuse detection; revocation closes live connections within 5 s.
-- Passwords hashed with Argon2id; concurrent verifications are capped so a login flood cannot exhaust server memory.
+- Passwords hashed with Argon2id; concurrent verifications are capped to bound the memory password checks can use.
 - No arbitrary URL fetching on the server until SSRF controls (egress allowlist, redirect limits, decode budgets) exist.
 - Updates are accepted only with signed metadata binding version, channel, platform, architecture, digest and size, with expiry and downgrade protection (see ADR 0010).
 - No telemetry. Crash reports are opt-in and shown to the user before sending.

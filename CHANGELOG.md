@@ -11,7 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - en-US, tr-TR and ja-JP seed translations.
 - Desktop shell with language picker, formatting preview and an IME-aware composer.
 - `cargo xtask i18n-check` and `cargo xtask perf`.
-- CI (fmt, clippy, tests on Windows/macOS/Linux, i18n, cargo-deny, rustdoc, MSRV), CodeQL and Dependabot.
+- CI: formatting, i18n check, typos, cargo-deny, rustdoc and MSRV, plus clippy, nextest and doctests on Windows, macOS and Linux. CodeQL and Dependabot.
 - Architecture docs, ADRs, threat model draft, performance budgets and contributor guides.
 - Send button in the composer.
 - `duydas-ui::virtual_list`: windowing for variable-height, bottom-anchored lists (Fenwick-tree height index, measured rows, prepend-safe positioning).
@@ -23,17 +23,17 @@ All notable changes to this project are documented here. The format follows [Kee
   - clipboard text and per-monitor DPI;
   - damage-based presentation of CPU-rendered frames.
 
-  In the example: first frame 14 ms after `main`, 5.8 MB private memory, no CPU use while idle.
-- `duydas-render`: in-house CPU renderer (ADR 0024), with no dependencies and no `unsafe`. It has:
+  In the example on Windows 11: first frame 14 ms (p50) / 16 ms (p95) after `main` over 21 runs, 5.8 MB private memory, 0.0 ms CPU over a 3 s idle sample.
+- `duydas-render`: in-house CPU renderer (ADR 0024), with no runtime dependencies and no `unsafe` (its windowed example uses `duydas-sys`). It has:
   - anti-aliased rectangles, rounded rectangles and borders;
   - glyph and icon masks, and images with rounded corners;
   - clips and scroll layers;
-  - tile-fingerprint damage tracking, so only what changed is redrawn and presented;
-  - scroll blitting, so scrolling moves pixels and draws only the newly exposed rows.
+  - tile-fingerprint damage tracking, so only damaged tiles are redrawn and presented;
+  - scroll blitting, so scrolling moves existing pixels and repaints the exposed rows plus whatever changed.
 
   Incremental frames are tested pixel for pixel against full redraws.
-- `cargo xtask render-bench`: replays the ADR 0018 scrolling session on the new renderer and checks the budget. With damage tracking, p99 is 1.5 ms at 1× and 2.5 ms at 2× (budget: 16.7 ms).
-- `duydas-text`: in-house Unicode 18.0 text segmentation (ADR 0025), with no dependencies and no `unsafe`. It finds grapheme clusters, word boundaries, and line break opportunities that follow the Japanese line-breaking rules, with a strict and a loose mode for small kana. It passes all of Unicode's conformance tests.
+- `cargo xtask render-bench`: replays the ADR 0018 scrolling session on the new renderer and checks the budget. Headless with synthetic glyphs, median p99 over five runs with damage tracking is 1.5 ms at 1× and 2.5 ms at 2× (budget: 16.7 ms), with no stalls over 50 ms.
+- `duydas-text`: in-house Unicode 18.0 text segmentation (ADR 0025), with no dependencies and no `unsafe`. It finds grapheme clusters, word boundaries, and line break opportunities that follow the Japanese line-breaking rules, with a strict and a loose mode for small kana. It passes Unicode 18.0's grapheme, word and line break conformance tests.
 - `cargo xtask unicode-gen`: regenerates `duydas-text`'s tables and conformance data from the Unicode Character Database.
 
 ### Changed
@@ -43,7 +43,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- Enter no longer sends a draft when the composer is unfocused, and never sends or inserts a newline during an IME composition.
+- Plain Enter sends only while the composer is focused and no IME composition is tracked; Shift+Enter is left to Iced. Testing with real input methods is still pending.
 - Messages missing a value or failing to resolve now fall back to English instead of showing partial text.
 - Message counts use locale grouping (`1.234 mesaj`).
 - Pseudo-locale no longer mangles interpolated user data.
