@@ -1,6 +1,6 @@
 name: New language
 description: Offer to translate Duydaş into a new language.
-labels: ["area: i18n", "new-language", "status: triage"]
+labels: ["type: feature", "area: i18n", "new-language", "status: triage"]
 body:
   - type: input
     id: language
