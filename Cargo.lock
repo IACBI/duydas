@@ -724,6 +724,10 @@ name = "duydas-sys"
 version = "0.0.1"
 
 [[package]]
+name = "duydas-text"
+version = "0.0.1"
+
+[[package]]
 name = "duydas-ui"
 version = "0.0.1"
 dependencies = [

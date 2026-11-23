@@ -6,6 +6,8 @@
 //! - `vlist`: run the virtual-list spike (ADR 0018) on each renderer and scale factor.
 //! - `render-bench`: run the CPU renderer's scroll benchmark (ADR 0024) against the ADR 0018
 //!   budget.
+//! - `unicode-gen [--check]`: regenerate duydas-text's Unicode tables and conformance data from
+//!   the Unicode Character Database.
 
 #![allow(
     clippy::print_stdout,
@@ -15,6 +17,7 @@
 mod i18n;
 mod perf;
 mod render;
+mod unicode;
 mod vlist;
 
 use std::path::PathBuf;
@@ -27,9 +30,11 @@ fn main() -> ExitCode {
         Some("perf") => perf::run(&workspace_root(), &args[1..]),
         Some("vlist") => vlist::run(&workspace_root()),
         Some("render-bench") => render::run(&workspace_root()),
+        Some("unicode-gen") => unicode::run(&workspace_root(), &args[1..]),
         _ => {
             eprintln!(
-                "usage: cargo xtask <i18n-check [--strict] | perf [--runs N] | vlist | render-bench>"
+                "usage: cargo xtask <i18n-check [--strict] | perf [--runs N] | vlist | render-bench | \
+                 unicode-gen [--check]>"
             );
             return ExitCode::from(2);
         }

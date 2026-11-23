@@ -9,6 +9,7 @@ members = [
     "crates/duydas-ui",
     "crates/duydas-sys",
     "crates/duydas-render",
+    "crates/duydas-text",
     "apps/duydas-desktop",
     "apps/duydas-server",
     "xtask",

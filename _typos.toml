@@ -6,6 +6,9 @@ extend-exclude = [
     "*.svg",
     "spikes/*/src/corpus.rs",
     "crates/duydas-render/examples/scroll/corpus.rs",
+    # Generated from the Unicode Character Database: code points and property values.
+    "crates/duydas-text/src/tables.rs",
+    "crates/duydas-text/tests/data/",
 ]
 
 [default.extend-words]
@@ -13,3 +16,7 @@ extend-exclude = [
 sistem = "sistem"
 # Win32 SDK names (TME_LEAVE, a TrackMouseEvent flag).
 tme = "tme"
+# UAX #14 line break class BA (break after).
+ba = "ba"
+# General_Category Nd (decimal number).
+nd = "nd"

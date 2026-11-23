@@ -33,6 +33,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
   Incremental frames are tested pixel for pixel against full redraws.
 - `cargo xtask render-bench`: replays the ADR 0018 scrolling session on the new renderer and checks the budget. With damage tracking, p99 is 1.5 ms at 1× and 2.5 ms at 2× (budget: 16.7 ms).
+- `duydas-text`: in-house Unicode 18.0 text segmentation (ADR 0025), with no dependencies and no `unsafe`. It finds grapheme clusters, word boundaries, and line break opportunities that follow the Japanese line-breaking rules, with a strict and a loose mode for small kana. It passes all of Unicode's conformance tests.
+- `cargo xtask unicode-gen`: regenerates `duydas-text`'s tables and conformance data from the Unicode Character Database.
 
 ### Changed
 
