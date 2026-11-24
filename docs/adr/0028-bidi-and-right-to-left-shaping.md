@@ -24,15 +24,15 @@ Two parts are needed: the Unicode Bidirectional Algorithm (UAX #9), which finds 
   - Levels are per byte, like every offset in the crate. The work is linear in the text: the bracket stack holds 63 entries as BD16 says, bracket pairs are kept in the order of their opening brackets, embedding depth stops at 125, and a call to a line function costs the line's length plus a binary search over the paragraphs.
   - Bidi_Class, Bidi_Paired_Bracket and Bidi_Mirroring_Glyph are generated from the UCD by `cargo xtask unicode-gen` (`bidi_tables.rs`).
 - **Right-to-left shaping, identical to HarfBuzz 10.4.0** for the scripts ADR 0027 covers and for Hebrew. `ShapeOptions::direction` takes the run's direction; the glyphs always come out in visual order, left to right, with clusters that do not increase in a right-to-left run. As HarfBuzz does:
-  - HarfBuzz merges the clusters of its grapheme clusters (its continuation rule: marks, ZWJ and an emoji after it, emoji modifiers, the second regional indicator), in either direction. Here a cluster is the union of the graphemes and HarfBuzz's grapheme clusters that overlap, so neither is split between two clusters;
-  - a run is shaped in its script's own direction, so text in the other direction is reversed by those clusters and reversed back afterwards; digits or regional indicators without letters in a right-to-left script are not reversed;
+  - HarfBuzz merges the clusters of its grapheme clusters (its continuation rule: marks, ZWJ and an emoji after it, emoji modifiers, the second regional indicator), in either direction. Here a cluster is the union of the graphemes and HarfBuzz's grapheme clusters that overlap, so neither is split between two clusters. "Emoji" is Extended_Pictographic in the Unicode 16.0 emoji data HarfBuzz 10.4.0 was built with, which `unicode-gen` keeps as a shaping flag of its own: Unicode 18 removed many characters (★, for one) that HarfBuzz still counts, while graphemes use Unicode 18;
+  - a run is shaped in its script's own direction: text written the other way is first reversed by HarfBuzz's grapheme clusters, and the glyphs are reversed into visual order at the end only when the script's direction is right to left. Digits or regional indicators without letters in a right-to-left script are not reversed;
   - right to left, characters with a mirror image are replaced by it, and `rtlm` (its bit for value 1) applies to those without one in the font; `rtla` and `rtlm` take the place of `ltra` and `ltrm`;
   - automatic fractions in backward text swap `numr` and `dnom`;
   - cursive attachment follows the lookup's right-to-left flag, mark attachments add the advances on the other side, and legacy `kern` tables kern in visual order;
   - without GPOS, fallback mark positioning places marks from the other side, with ligature components in reverse order and HarfBuzz's signed arithmetic for a component that wrapped to 0;
   - combining classes are HarfBuzz's modified classes (Hebrew, Arabic, Syriac, Thai, Lao, Tibetan), which decide mark order and fallback placement;
-  - Hebrew gets HarfBuzz's Hebrew shaper: points compose into presentation forms when the font has no GPOS `mark` feature, a meteg (or another mark below) after patah or qamats and sheva or hiriq moves before the sheva or hiriq, and GPOS applies only when the font has a `hebr` script;
-  - cluster merges follow HarfBuzz's in-place buffer edits, so they match in either direction.
+  - Hebrew gets HarfBuzz's Hebrew shaper: points compose into presentation forms when the selected plan has no `mark` feature (in GSUB or GPOS), a meteg (or another mark below) after patah or qamats and sheva or hiriq moves before the sheva or hiriq, merging their clusters, and GPOS applies only when the font has a `hebr` script;
+  - cluster merges follow HarfBuzz's buffer edits, so they match in either direction: mark reordering, Hebrew's swap, and in Hangul a composed syllable, the jamo of one, and a tone mark moved in front of its syllable. The dotted circle a lone tone mark gets keeps the mark's properties, as in HarfBuzz, so marks before it sort after both.
 
   As in HarfBuzz, a character and the marks right after it are decomposed together. A character on its own, such as a letter before a joiner, keeps the glyph the font has. Font fallback counts a Hebrew letter and point as covered when the font has their presentation form and its plan has no `mark` feature (in GSUB or GPOS), because shaping then composes them. `itemize` knows neither the language nor the features, so it judges with the defaults; a font with `mark` in only some languages can be picked for a language that does not compose.
 - **Not supported yet:**
@@ -49,17 +49,18 @@ Two parts are needed: the Unicode Bidirectional Algorithm (UAX #9), which finds 
 - **HarfBuzz 10.4.0 on installed fonts.** The dump test now shapes each text in 12 settings, three of them right to left (Hebrew, fractions, no kerning), and adds Hebrew, Arabic and mixed texts: **403,788 runs** (302,841 left to right, 100,947 right to left) over 437 faces. 1,080 differ:
   - 720 in Arabic, which has no Arabic shaper yet;
   - 324 clusters, and 36 Hebrew mark offsets in Segoe UI Emoji, the two documented differences above.
-  Everything else matches: glyphs, advances and offsets, and clusters as ADR 0027 compares them. HarfBuzz's clusters are floored to grapheme starts, dropping the boundary between a control character and a mark after it; compared raw, they differ wherever HarfBuzz's are finer.
+  Everything else matches: glyphs, advances and offsets, and clusters as ADR 0027 compares them. Both sides' clusters are floored to the grapheme starts before them, leaving out a grapheme start that is a mark after a control or format character; this hides where HarfBuzz is finer than a grapheme, while a merge across graphemes must match exactly. Compared raw, clusters differ wherever HarfBuzz's are finer.
 - **Synthetic fonts.** All of these match HarfBuzz in glyphs, advances and offsets:
   - 152 right-to-left cases built with fontTools: mirroring with and without `rtlm`, cursive chains in both directions, marks on ligatures, cross-stream `kern`, fallback marks, Hebrew compositions, numeric runs;
   - 84 cases from the review: `rtlm` values, ligatures of 18 components with marks, letters before joiners, emoji after ZWJ, marks after controls;
-  - 44 on the unit tests' fixture fonts.
+  - 55 on the unit tests' fixture fonts;
+  - 815 more on installed fonts (Malgun Gothic, Arial, Times New Roman, Segoe UI, Segoe UI Symbol) and the Hebrew fixture font, 807 of them generated: Hangul jamo, syllables and tone marks with marks and joiners; Hebrew letters and points with controls and joiners; and ZWJ before each of 142 characters that are pictographic in Unicode 16's emoji data and not in 18's, in both directions.
 
-  Clusters match too, except where HarfBuzz's are finer than a grapheme. The left-to-right cases of ADR 0027 still match.
+  Clusters match too, except where HarfBuzz's are finer than a grapheme (140 of the generated Hangul cases, between jamo; never in the other order). The left-to-right cases of ADR 0027 still match.
 - **Unit tests.**
   - Five shaping tests whose expected output comes from HarfBuzz: GPOS with cursive, marks, mirroring, `rtla`/`ltra` and fractions; an old Hebrew font with presentation forms, meteg, fallback marks and a cross-stream `kern`; dropped ignorables; run direction; the review's corners.
-  - Tests of font fallback for Hebrew, of the budget at the boundary of a `kern` pass (with and without a cross-stream subtable), and of the cursive chain's measure.
-  - 12 tests of the bidi API: paragraphs, per-byte levels, L1 at line ends, separators and line starts, visual runs per paragraph, isolates and embeddings, mirroring, the depth limit, long input (many lines, brackets and nestings) within a time limit, and random texts in each paragraph direction, whose runs are checked against runs built from `line_levels`.
+  - Tests of font fallback for Hebrew, of the budget at the boundary of a `kern` pass (with and without a cross-stream subtable) and of a cursive attachment that reverses a chain, comparing whole positions and attachments, and of the cursive chain's measure.
+  - 12 tests of the bidi API: paragraphs, per-byte levels, L1 at line ends, separators and line starts, visual runs per paragraph, isolates and embeddings, mirroring, the depth limit, long input (many lines, brackets and nestings) within a time limit, and random texts in each paragraph direction, whose runs are checked against runs built from `line_levels` and whose order against L2 applied to the levels directly.
 - **Performance.** Left-to-right shaping is unchanged: `shape_bench` gives 192–251 ns per character on the ADR 0027 messages after the review's fixes (187–245 before), within its ranges.
 
 ## Review
@@ -93,8 +94,19 @@ A second pass over the fixes found 3 medium and 4 low issues, all fixed:
 - the docs overstated the line functions' cost and the comparison, and the sample header counted semicolons in comments;
 - tests: Hebrew for the wrapped ligature component (Latin right to left is reversed first), runs checked against an oracle of their own, and the budget checked at the `kern` and cursive call sites.
 
+A third pass found 3 medium and 4 low issues, all fixed, with expectations from HarfBuzz:
+
+- HarfBuzz's continuation rule used Unicode 18's Extended_Pictographic; HarfBuzz 10.4.0 uses Unicode 16's, which still includes characters such as ★ (`a`, ZWJ, ★ right to left came out with ★ first);
+- Hangul composition and tone-mark reordering did not merge clusters, so right-to-left clusters could increase;
+- Hebrew's meteg swap did not merge clusters, so a meteg reversed from the start of left-to-right text decreased them;
+- the cursive check could look at one link with no budget left;
+- the `kern` test compared only offsets and advances, the cursive test did not reach the call site, and the random bidi test ordered runs with the function it tested;
+- the ADR described the comparison's projection, the final reversal and the Hebrew gate loosely.
+
+Checking the fixes on generated Hangul text found one more difference, fixed: the dotted circle a lone tone mark gets took U+25CC's properties instead of the mark's, so an acute before the mark sorted between them.
+
 ## Consequences
 
 - **Next in step 4:** paragraph layout (ADR 0029): line breaking over shaped runs, bidi reordering per line, line metrics, hit testing, caret and selection. Then the glyph cache.
 - **Arabic** needs HarfBuzz's Arabic shaper before Arabic messages look right; the bidi and right-to-left parts it needs are in place.
-- **Keeping up with HarfBuzz and Unicode** works as in ADR 0027: the dump test and the fixture writer give the data to compare, and `unicode-gen` regenerates the bidi tables with the others.
+- **Keeping up with HarfBuzz and Unicode** works as in ADR 0027: the dump test and the fixture writer give the data to compare, and `unicode-gen` regenerates the bidi tables with the others. Moving to a new HarfBuzz also means setting `HARFBUZZ_EMOJI_VERSION` in `xtask/src/unicode.rs` to the emoji data named in its `hb-unicode-emoji-table.hh`; upgrading Unicode (ADR 0025) leaves it alone.

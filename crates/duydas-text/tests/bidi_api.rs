@@ -305,6 +305,37 @@ fn random_text_keeps_the_invariants() {
                 .map(|r| (r.range, r.level))
                 .collect();
             assert_eq!(shown, expected, "{text:?} {line:?}");
+            // L2 again without `visual_order`: from the highest level down to the lowest
+            // odd one, reverse every stretch of bytes at that level or higher.
+            let level = |i: usize| line_levels[i - start];
+            let mut order = Vec::new();
+            for p in bidi.paragraphs() {
+                let (from, to) = (p.range.start.max(start), p.range.end.min(end));
+                let mut bytes: Vec<usize> = (from..to).collect();
+                let highest = bytes.iter().map(|&i| level(i)).max().unwrap_or(0);
+                let lowest_odd = bytes.iter().map(|&i| level(i)).min().unwrap_or(0) | 1;
+                for at in (lowest_odd..=highest).rev() {
+                    let mut k = 0;
+                    while k < bytes.len() {
+                        let run = bytes[k..].iter().take_while(|&&i| level(i) >= at).count();
+                        bytes[k..k + run].reverse();
+                        k += run.max(1);
+                    }
+                }
+                order.extend(bytes);
+            }
+            let flat: Vec<usize> = shown
+                .iter()
+                .flat_map(|(range, level)| {
+                    let bytes: Vec<usize> = range.clone().collect();
+                    if level % 2 == 1 {
+                        bytes.into_iter().rev().collect()
+                    } else {
+                        bytes
+                    }
+                })
+                .collect();
+            assert_eq!(flat, order, "{text:?} {line:?}");
             for (range, _) in &shown {
                 assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
             }

@@ -1269,18 +1269,64 @@ fn kern_passes_need_the_whole_budget() {
         for left in [cost - 1, cost] {
             let limits = Limits::new(0);
             assert!(limits.spend((1 << 20) - left));
-            let mut pos = vec![Position::with_advance(500); 2];
+            let untouched = vec![Position::with_advance(500); 2];
+            let mut pos = untouched.clone();
             kern.apply(&info, &mut pos, &limits, false);
-            let moved = pos
-                .iter()
-                .any(|p| (p.x_advance, p.x_offset, p.y_offset) != (500, 0, 0));
+            // Attachments too: a pass refused may not have hung any glyph.
             assert_eq!(
-                moved,
+                pos != untouched,
                 left == cost,
                 "cross stream {cross_stream}, {left} left"
             );
             assert!(limits.exhausted());
         }
+    }
+}
+
+#[test]
+fn cursive_attachment_needs_the_whole_budget() {
+    // Glyph 2 hangs from glyph 1; then a right-to-left lookup hangs it from glyph 3, which
+    // first reverses the one-link chain from 2 to 1: three walks of one step.
+    let first = || cursive(&[(1, None, Some((500, 0))), (2, Some((20, 10)), None)]);
+    let second = cursive(&[(2, None, Some((480, 0))), (3, Some((30, 40)), None)]);
+    let both = simple_table(
+        &[*b"curs", *b"curs"],
+        vec![
+            lookup(3, 0, vec![first()]),
+            lookup(3, RIGHT_TO_LEFT, vec![second]),
+        ],
+    );
+    let only_first = simple_table(&[*b"curs"], vec![lookup(3, 0, vec![first()])]);
+    let run = |table: &[u8], left: usize| {
+        let tables = Tables {
+            gpos: Some(table),
+            ..Tables::default()
+        };
+        let lookups = select(table, true, &[], None, &all_features(table)).gsub;
+        let mut info = buffer(&Gdef::default(), &[1, 2, 3]);
+        let mut pos = vec![Position::with_advance(600); 3];
+        let mut limits = Limits::new(0);
+        assert!(limits.spend((1 << 20) - left));
+        position(&tables, &lookups, &mut info, &mut pos, &mut limits, false);
+        (pos, limits.left())
+    };
+    let (all, rest) = run(&both, 1 << 20);
+    let (after_first, _) = run(&only_first, 1 << 20);
+    assert_ne!(all, after_first);
+    // The chain is reversed: glyph 1 now hangs from glyph 2, the one after it.
+    let mut reversed = all[0];
+    reversed.hang(1);
+    assert_eq!(all[0], reversed);
+    let cost = (1 << 20) - rest;
+    // The reversal is the last thing charged: with its three steps left it applies; with
+    // two, or none, the second attachment changes nothing and the budget is spent.
+    assert_eq!(run(&both, cost), (all, 0));
+    for short in [1, 3] {
+        assert_eq!(
+            run(&both, cost - short),
+            (after_first.clone(), 0),
+            "{short} short"
+        );
     }
 }
 

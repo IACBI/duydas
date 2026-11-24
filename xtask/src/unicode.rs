@@ -11,6 +11,10 @@ use std::process::Command;
 
 const VERSION: &str = "18.0.0";
 const BASE_URL: &str = "https://www.unicode.org/Public";
+/// The emoji data HarfBuzz 10.4.0 generated its Extended_Pictographic table from. Its
+/// grapheme rule (an emoji after ZWJ continues the cluster) uses that set, which Unicode 18
+/// narrowed, so shaping keeps it as a flag of its own; segmentation uses `VERSION`.
+const HARFBUZZ_EMOJI_VERSION: &str = "16.0.0";
 
 const LINE_BREAK: &str = "LineBreak.txt";
 const EAST_ASIAN_WIDTH: &str = "EastAsianWidth.txt";
@@ -78,8 +82,12 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
         .map(|(name, _)| name)
         .chain(BIDI_SAMPLES.iter().map(|(name, _, _)| name));
     for name in inputs.iter().chain(tests) {
-        fetch(&ucd, name)?;
+        fetch(&ucd, VERSION, name)?;
     }
+    let harfbuzz_ucd = root.join("target").join("ucd").join(HARFBUZZ_EMOJI_VERSION);
+    fetch(&harfbuzz_ucd, HARFBUZZ_EMOJI_VERSION, EMOJI)?;
+    let harfbuzz_emoji = std::fs::read_to_string(harfbuzz_ucd.join(EMOJI))
+        .map_err(|e| format!("read {HARFBUZZ_EMOJI_VERSION} {EMOJI}: {e}"))?;
     let read = |name: &str| {
         std::fs::read_to_string(ucd.join(name)).map_err(|e| format!("read {name}: {e}"))
     };
@@ -90,7 +98,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
         ),
         (
             PathBuf::from(CRATE).join("src").join("shaping_tables.rs"),
-            shaping_tables(&read)?,
+            shaping_tables(&read, &harfbuzz_emoji)?,
         ),
         (
             PathBuf::from(CRATE).join("src").join("bidi_tables.rs"),
@@ -142,7 +150,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
 }
 
 /// Downloads one UCD file unless it is already there. The versioned URL never changes.
-fn fetch(dir: &Path, name: &str) -> Result<(), String> {
+fn fetch(dir: &Path, version: &str, name: &str) -> Result<(), String> {
     let path = dir.join(name);
     if path.exists() {
         return Ok(());
@@ -152,7 +160,7 @@ fn fetch(dir: &Path, name: &str) -> Result<(), String> {
     // A name of its own per process, published only once complete, so concurrent runs never
     // see or write each other's partial files.
     let partial = path.with_extension(format!("part{}", std::process::id()));
-    let url = format!("{BASE_URL}/{VERSION}/ucd/{name}");
+    let url = format!("{BASE_URL}/{version}/ucd/{name}");
     let status = Command::new("curl")
         .args(["--proto", "=https", "--tlsv1.2", "-sSfL", "-o"])
         .arg(&partial)
@@ -433,6 +441,7 @@ const DEFAULT_IGNORABLE: u32 = 1 << 17;
 const MARK: u32 = 1 << 18;
 const DECIMAL_NUMBER: u32 = 1 << 19;
 const LETTER: u32 = 1 << 20;
+const HARFBUZZ_PICTOGRAPHIC: u32 = 1 << 21;
 
 /// The combining class HarfBuzz sorts and positions marks by: Unicode's, with the Hebrew,
 /// Arabic and Syriac points renumbered into the order fonts expect, and a few Telugu, Thai,
@@ -476,7 +485,11 @@ fn harfbuzz_combining_class(ccc: u32) -> u32 {
 
 /// The tables shaping needs: each code point's script, canonical combining class and flags in
 /// a three-level trie like `tables`, the canonical decompositions, and the primary composites.
-fn shaping_tables(read: &dyn Fn(&str) -> Result<String, String>) -> Result<String, String> {
+/// `harfbuzz_emoji` is the emoji data of `HARFBUZZ_EMOJI_VERSION`.
+fn shaping_tables(
+    read: &dyn Fn(&str) -> Result<String, String>,
+    harfbuzz_emoji: &str,
+) -> Result<String, String> {
     // Script names to ISO 15924 codes.
     let mut codes: HashMap<String, String> = HashMap::new();
     for line in read(ALIASES)?.lines() {
@@ -563,8 +576,15 @@ fn shaping_tables(read: &dyn Fn(&str) -> Result<String, String>) -> Result<Strin
     assign(&mut excluded, &read(NORMALIZATION)?, |f| {
         Ok((f.len() == 1 && field(f, 0)? == "Full_Composition_Exclusion").then_some(true))
     })?;
+    let mut pictographic = vec![false; CODE_POINTS];
+    assign(&mut pictographic, harfbuzz_emoji, |f| {
+        Ok((field(f, 0)? == "Extended_Pictographic").then_some(true))
+    })?;
     for cp in 0..CODE_POINTS {
         info[cp] |= u32::from(script[cp]);
+        if pictographic[cp] {
+            info[cp] |= HARFBUZZ_PICTOGRAPHIC;
+        }
         if ignorable[cp] {
             info[cp] |= DEFAULT_IGNORABLE;
         }
@@ -600,7 +620,8 @@ fn shaping_tables(read: &dyn Fn(&str) -> Result<String, String>) -> Result<Strin
          /// modifies it (bits 8 to 15), and flags: {MARK:#x} for General_Category M*,\n\
          /// {NONSPACING_MARK:#x} for Mn, {DECIMAL_NUMBER:#x} for Nd, {LETTER:#x} for L*,\n\
          /// {DEFAULT_IGNORABLE:#x} for Default_Ignorable_Code_Point less the characters HarfBuzz\n\
-         /// draws.\n\
+         /// draws, {HARFBUZZ_PICTOGRAPHIC:#x} for Extended_Pictographic in the emoji data of\n\
+         /// Unicode {HARFBUZZ_EMOJI_VERSION}, which HarfBuzz 10.4.0 uses.\n\
          pub(crate) fn char_info(c: char) -> u32 {{\n    \
          let cp = c as usize;\n    \
          let mid = usize::from(TOP[cp >> 12]) * {BLOCK} + ((cp >> 6) & {mask});\n    \
@@ -613,7 +634,8 @@ fn shaping_tables(read: &dyn Fn(&str) -> Result<String, String>) -> Result<Strin
          pub(crate) const NONSPACING_MARK: u32 = {NONSPACING_MARK:#x};\n\
          pub(crate) const DEFAULT_IGNORABLE: u32 = {DEFAULT_IGNORABLE:#x};\n\
          pub(crate) const DECIMAL_NUMBER: u32 = {DECIMAL_NUMBER:#x};\n\
-         pub(crate) const LETTER: u32 = {LETTER:#x};\n",
+         pub(crate) const LETTER: u32 = {LETTER:#x};\n\
+         pub(crate) const HARFBUZZ_PICTOGRAPHIC: u32 = {HARFBUZZ_PICTOGRAPHIC:#x};\n",
         mask = BLOCK - 1,
     );
     let _ = writeln!(out, "/// ISO 15924 codes, by script index.");

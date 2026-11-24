@@ -197,7 +197,10 @@ impl Apply<'_, '_> {
         };
         // The chain the attachment reverses is walked to measure it, then to collect it and
         // to reverse it: the budget must cover all three before anything changes. A chain
-        // longer than that spends the budget, walked or not.
+        // longer than that spends the budget, walked or not; with none left, nothing is.
+        if self.limits.left() == 0 {
+            return None;
+        }
         let Some(chain) = cursive_chain_len(self.pos, child, parent, self.limits.left() / 3) else {
             self.limits.spend(usize::MAX);
             return None;

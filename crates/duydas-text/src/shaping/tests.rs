@@ -1633,6 +1633,24 @@ fn old_hebrew_fonts_shape_like_harfbuzz() {
             (H_ALEF_PATAH, 0, 600, 0, 0)
         ]
     );
+    // A meteg before its letter has a cluster of its own. Left to right it is reversed to
+    // after the points, and moving it before the sheva merges the two clusters.
+    assert_eq!(
+        shaped("\u{5BD}\u{5D0}\u{5B7}\u{5B0}", Ltr),
+        [
+            (H_SHEVA, 0, 0, 450, -174),
+            (H_METEG, 0, 0, 450, -12),
+            (H_ALEF_PATAH, 0, 600, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("\u{5BD}\u{5D0}\u{5B7}\u{5B0}", Rtl),
+        [
+            (H_SHEVA, 2, 0, 450, -12),
+            (H_ALEF_PATAH, 2, 600, 0, 0),
+            (H_METEG, 0, 0, 0, 0)
+        ]
+    );
     let cross = Font::from_data(old_hebrew_font_data(true, false), 0).expect("the font parses");
     assert_eq!(
         shaped_rtl(&cross, "\u{5D0}\u{5D1}\u{5D5}\u{5B7}", Ltr),
@@ -1738,12 +1756,18 @@ const V_A_RING: u16 = 7;
 const V_DIAERESIS: u16 = 8;
 const V_GRIN: u16 = 9;
 const V_BRACKET_ALTERNATES: u16 = 12;
+const V_NA: u16 = 15;
+const V_NAK: u16 = 16;
+const V_TONE: u16 = 17;
+const V_CIRCLE: u16 = 18;
 const V_LIGATURE: u16 = 19;
 
 /// A font for corners of HarfBuzz's behaviour found in review: `rtlm` alternates for a
 /// bracket it has no mirror for, a ligature of 18 components that marks can follow (only
 /// four bits of a component are kept) and no GPOS, so marks fall back to the glyphs' boxes,
-/// the Angstrom sign and the letter it decomposes to, and an emoji and jamo.
+/// the Angstrom sign and the letter it decomposes to, an emoji and a star (pictographic in
+/// HarfBuzz's emoji data, not in Unicode 18's), jamo, two syllables, a tone mark and a
+/// dotted circle.
 fn review_font_data() -> Vec<u8> {
     let cmap = cmap_table(&[(
         3,
@@ -1758,7 +1782,12 @@ fn review_font_data() -> Vec<u8> {
             (0x5D0, 0x5D0, u32::from(V_ALEF)),
             (0x1100, 0x1100, 10),
             (0x1161, 0x1161, 11),
+            (0x11A8, 0x11A8, 14),
             (0x212B, 0x212B, u32::from(V_ANGSTROM)),
+            (0x25CC, 0x25CC, u32::from(V_CIRCLE)),
+            (0x2605, 0x2605, u32::from(V_GRIN)),
+            (0x302E, 0x302E, u32::from(V_TONE)),
+            (0xB098, 0xB099, u32::from(V_NA)),
             (0x1F600, 0x1F600, u32::from(V_GRIN)),
         ]),
     )]);
@@ -1913,6 +1942,37 @@ fn review_cases_shape_like_harfbuzz() {
             (SPACE_GLYPH, 0, 0, 0, 0),
             (V_GRIN, 0, 500, 0, 0),
             (10, 0, 500, 0, 0)
+        ]
+    );
+    // HarfBuzz takes a star after ZWJ as pictographic (Unicode 16 emoji data), so it
+    // continues the cluster, though Unicode 18 starts a grapheme there.
+    assert_eq!(
+        shaped("a\u{200D}\u{2605}", 'a', &[], Rtl),
+        [
+            (V_A, 0, 500, 0, 0),
+            (SPACE_GLYPH, 0, 0, 0, 0),
+            (V_GRIN, 0, 500, 0, 0)
+        ]
+    );
+    // Hangul edits merge clusters as HarfBuzz's buffer does: a tone mark moved in front of
+    // its syllable (here after reversal), a syllable composed of jamo from two clusters.
+    assert_eq!(
+        shaped("\u{302E}\u{B098}", '\u{B098}', &[], Rtl),
+        [(V_TONE, 0, 500, 0, 0), (V_NA, 0, 500, 0, 0)]
+    );
+    assert_eq!(
+        shaped("\u{11A8}\u{301}\u{B098}", '\u{B098}', &[], Rtl),
+        [(V_NAK, 0, 500, 0, 0), (V_ACUTE, 0, 0, 0, 0)]
+    );
+    // A tone mark with no syllable before it gets a dotted circle that keeps the mark's
+    // combining class, so the acute before them sorts after both.
+    assert_eq!(
+        shaped("\u{B098}\u{301}\u{302E}", '\u{B098}', &[], Ltr),
+        [
+            (V_NA, 0, 500, 0, 0),
+            (V_TONE, 0, 500, 0, 0),
+            (V_CIRCLE, 0, 500, 0, 0),
+            (V_ACUTE, 0, 0, 0, 0)
         ]
     );
 }

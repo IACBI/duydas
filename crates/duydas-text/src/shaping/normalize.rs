@@ -6,8 +6,7 @@
 use crate::bidi;
 use crate::font::Font;
 use crate::font::layout::{LJMO, TJMO, VJMO};
-use crate::props::props;
-use crate::shaping_tables::{COMPOSITIONS, DECOMPOSITIONS, MARK, char_info};
+use crate::shaping_tables::{COMPOSITIONS, DECOMPOSITIONS, HARFBUZZ_PICTOGRAPHIC, MARK, char_info};
 
 /// A character and the glyph it maps to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +40,10 @@ struct Source {
     /// The Hangul jamo feature (see [`preprocess_hangul`]).
     jamo: u8,
     mirrored: bool,
+    /// The dotted circle a Hangul tone mark gets with no syllable before it: drawn with
+    /// U+25CC's glyph, it keeps the mark as `c`, because HarfBuzz gives it the mark's
+    /// properties (combining class and category), so it is ordered and placed as the mark.
+    dotted_circle: bool,
 }
 
 impl Source {
@@ -50,6 +53,7 @@ impl Source {
             cluster,
             jamo: 0,
             mirrored: false,
+            dotted_circle: false,
         }
     }
 }
@@ -188,7 +192,7 @@ pub(super) fn normalize(
         chars = reverse_graphemes(&chars, &continues);
     }
     if hangul {
-        chars = preprocess_hangul(font, &chars);
+        chars = preprocess_hangul(font, chars);
     }
     let mut out = Vec::with_capacity(chars.len());
     let mut rest = &chars[..];
@@ -264,7 +268,7 @@ fn continuations(chars: &[Source]) -> Vec<bool> {
             )
             || i.checked_sub(1).map(after).is_some_and(|(p, p_continues)| {
                 (regional(c) && regional(p) && !p_continues)
-                    || (p == '\u{200D}' && props(c).extended_pictographic())
+                    || (p == '\u{200D}' && char_info(c) & HARFBUZZ_PICTOGRAPHIC != 0)
             });
         continues.push(continuation);
     }
@@ -316,9 +320,12 @@ fn is_combining_t(u: u32) -> bool {
 /// decomposed into jamo the font has, which then take the `ljmo`, `vjmo` and `tjmo`
 /// features. A tone mark after a syllable moves in front of it, unless its glyph has no
 /// width; one with no syllable before it gets a dotted circle, when the font has one.
-fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
+///
+/// Clusters merge as HarfBuzz's buffer edits merge them: a composed syllable takes the
+/// clusters of its jamo, and a moved tone mark or the jamo of a syllable share theirs.
+fn preprocess_hangul(font: &Font, mut chars: Vec<Source>) -> Vec<Source> {
     let has = |u: u32| char::from_u32(u).filter(|&c| font.glyph_index(c).is_some());
-    let code = |i: usize| chars.get(i).map(|s| u32::from(s.c));
+    let code = |chars: &[Source], i: usize| chars.get(i).map(|s| u32::from(s.c));
     let jamo = [LJMO, VJMO, TJMO];
     let mut out: Vec<Source> = Vec::with_capacity(chars.len());
     // The last syllable put out, `out[start..end]`, when `start < end`.
@@ -333,13 +340,16 @@ fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
                 .glyph_index(c)
                 .is_some_and(|g| font.advance(g) == Some(0));
             if start < end && end == out.len() {
-                if zero_width {
-                    out.push(source);
-                } else {
-                    out.insert(start, source);
+                out.push(source);
+                if !zero_width {
+                    merge_output(&mut chars, i + 1, &mut out, start, end + 1);
+                    out[start..=end].rotate_right(1);
                 }
-            } else if let Some(circle) = has(0x25CC) {
-                let circle = Source::new(circle, cluster);
+            } else if has(0x25CC).is_some() {
+                let circle = Source {
+                    dotted_circle: true,
+                    ..source
+                };
                 out.extend(if zero_width {
                     [circle, source]
                 } else {
@@ -354,8 +364,8 @@ fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
         }
         start = out.len();
         if is_l(u) {
-            if let Some(v) = code(i + 1).filter(|&v| is_v(v)) {
-                let t = code(i + 2).filter(|&t| is_t(t));
+            if let Some(v) = code(&chars, i + 1).filter(|&v| is_v(v)) {
+                let t = code(&chars, i + 2).filter(|&t| is_t(t));
                 let len = if t.is_some() { 3 } else { 2 };
                 if (L_BASE..L_BASE + 19).contains(&u)
                     && (V_BASE..V_BASE + 21).contains(&v)
@@ -365,7 +375,8 @@ fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
                         + (v - V_BASE) * T_COUNT
                         + t.map_or(0, |t| t - T_BASE))
                 {
-                    out.push(Source::new(s, cluster));
+                    merge_input(&mut chars, i, &mut out, i, i + len);
+                    out.push(Source::new(s, chars[i].cluster));
                     end = start + 1;
                 } else {
                     for k in 0..len {
@@ -375,6 +386,7 @@ fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
                         });
                     }
                     end = start + len;
+                    merge_output(&mut chars, i + len, &mut out, start, end);
                 }
                 i += len;
                 continue;
@@ -382,13 +394,14 @@ fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
         } else if (S_BASE..S_BASE + S_COUNT).contains(&u) {
             let has_glyph = font.glyph_index(c).is_some();
             let (lv, t) = ((u - S_BASE) / T_COUNT, (u - S_BASE) % T_COUNT);
-            let next = code(i + 1);
+            let next = code(&chars, i + 1);
             if t == 0
                 && let Some(s) = next
                     .filter(|&n| is_combining_t(n))
                     .and_then(|n| has(u + n - T_BASE))
             {
-                out.push(Source::new(s, cluster));
+                merge_input(&mut chars, i, &mut out, i, i + 2);
+                out.push(Source::new(s, chars[i].cluster));
                 end = start + 1;
                 i += 2;
                 continue;
@@ -414,6 +427,7 @@ fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
                         i += 1;
                         end += 1;
                     }
+                    merge_output(&mut chars, i, &mut out, start, end);
                     continue;
                 }
             }
@@ -425,6 +439,67 @@ fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
         i += 1;
     }
     out
+}
+
+/// HarfBuzz's `merge_clusters` during a pass that reads `chars` from `idx` and has put out
+/// `out`: `chars[start..end]` take the smallest of their clusters, and so do the unread
+/// characters next to them that share the cluster of the first or last, and the output
+/// before them when the merge reaches `idx`.
+fn merge_input(chars: &mut [Source], idx: usize, out: &mut [Source], start: usize, end: usize) {
+    let (mut start, mut end) = (start, end);
+    if end - start < 2 {
+        return;
+    }
+    let cluster = chars[start..end]
+        .iter()
+        .map(|s| s.cluster)
+        .min()
+        .unwrap_or(0);
+    if cluster != chars[end - 1].cluster {
+        while end < chars.len() && chars[end - 1].cluster == chars[end].cluster {
+            end += 1;
+        }
+    }
+    if cluster != chars[start].cluster {
+        while idx < start && chars[start - 1].cluster == chars[start].cluster {
+            start -= 1;
+        }
+    }
+    let first = chars[start].cluster;
+    if idx == start && first != cluster {
+        for s in out.iter_mut().rev().take_while(|s| s.cluster == first) {
+            s.cluster = cluster;
+        }
+    }
+    for s in &mut chars[start..end] {
+        s.cluster = cluster;
+    }
+}
+
+/// HarfBuzz's `merge_out_clusters`, the same for `out[start..end]`: the output next to them
+/// that shares a cluster with the first or last joins in, and so do the unread characters
+/// from `idx` when the merge reaches the end of the output.
+fn merge_output(chars: &mut [Source], idx: usize, out: &mut [Source], start: usize, end: usize) {
+    let (mut start, mut end) = (start, end);
+    if end - start < 2 {
+        return;
+    }
+    let cluster = out[start..end].iter().map(|s| s.cluster).min().unwrap_or(0);
+    while start > 0 && out[start - 1].cluster == out[start].cluster {
+        start -= 1;
+    }
+    while end < out.len() && out[end - 1].cluster == out[end].cluster {
+        end += 1;
+    }
+    if end == out.len() {
+        let last = out[end - 1].cluster;
+        for s in chars[idx..].iter_mut().take_while(|s| s.cluster == last) {
+            s.cluster = cluster;
+        }
+    }
+    for s in &mut out[start..end] {
+        s.cluster = cluster;
+    }
 }
 
 struct Mapper<'a> {
@@ -451,6 +526,11 @@ impl Mapper<'_> {
             self.cluster = s.cluster;
             self.jamo = s.jamo;
             self.mirrored = s.mirrored;
+            if s.dotted_circle {
+                let glyph = self.glyph('\u{25CC}').unwrap_or(0);
+                self.push(s.c, glyph, 0);
+                continue;
+            }
             self.current(s.c, shortest);
         }
     }
@@ -466,6 +546,7 @@ impl Mapper<'_> {
                 jamo,
                 mirrored,
                 cluster,
+                ..
             } = group[i];
             self.cluster = cluster;
             self.jamo = jamo;
@@ -609,7 +690,7 @@ fn reorder(chars: &mut [Char], shaper: Shaper) {
                 }
             }
             if let Shaper::Hebrew { .. } = shaper {
-                reorder_hebrew(&mut chars[i..end]);
+                reorder_hebrew(chars, i, end);
             }
         }
         i = end;
@@ -641,22 +722,24 @@ fn merge_clusters(chars: &mut [Char], mut start: usize, mut end: usize) {
 
 /// HarfBuzz's Hebrew mark order: in patah or qamats, then sheva or hiriq, then meteg or a
 /// mark below, the last two swap, the order fonts expect. Only the first such triple in a
-/// run of marks moves. The classes are HarfBuzz's (see `char_info`).
-fn reorder_hebrew(marks: &mut [Char]) {
+/// run of marks, `chars[start..end]`, moves; their clusters merge first, since a mark can
+/// start a cluster (at the start of the text, or after a control character). The classes
+/// are HarfBuzz's (see `char_info`).
+fn reorder_hebrew(chars: &mut [Char], start: usize, end: usize) {
     const PATAH: u8 = 20;
     const QAMATS: u8 = 21;
     const SHEVA: u8 = 22;
     const HIRIQ: u8 = 23;
     const METEG: u8 = 25;
     const BELOW: u8 = 220;
-    for i in 2..marks.len() {
-        let class = |k: usize| combining_class(marks[k].c);
+    for i in start + 2..end {
+        let class = |k: usize| combining_class(chars[k].c);
         if matches!(class(i - 2), PATAH | QAMATS)
             && matches!(class(i - 1), SHEVA | HIRIQ)
             && matches!(class(i), METEG | BELOW)
         {
-            // Both are in the cluster of the base before them, so their clusters agree.
-            marks.swap(i - 1, i);
+            merge_clusters(chars, i - 1, i + 1);
+            chars.swap(i - 1, i);
             break;
         }
     }
