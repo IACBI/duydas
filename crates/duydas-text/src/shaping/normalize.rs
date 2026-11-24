@@ -322,12 +322,13 @@ fn is_combining_t(u: u32) -> bool {
 /// width; one with no syllable before it gets a dotted circle, when the font has one.
 ///
 /// Clusters merge as HarfBuzz's buffer edits merge them: a composed syllable takes the
-/// clusters of its jamo, and a moved tone mark or the jamo of a syllable share theirs.
+/// clusters of its jamo, and a moved tone mark or the jamo of a syllable share theirs. The
+/// work is linear: see [`Output`].
 fn preprocess_hangul(font: &Font, mut chars: Vec<Source>) -> Vec<Source> {
     let has = |u: u32| char::from_u32(u).filter(|&c| font.glyph_index(c).is_some());
     let code = |chars: &[Source], i: usize| chars.get(i).map(|s| u32::from(s.c));
     let jamo = [LJMO, VJMO, TJMO];
-    let mut out: Vec<Source> = Vec::with_capacity(chars.len());
+    let mut out = Output::with_capacity(chars.len());
     // The last syllable put out, `out[start..end]`, when `start < end`.
     let (mut start, mut end) = (0, 0);
     let mut i = 0;
@@ -342,19 +343,22 @@ fn preprocess_hangul(font: &Font, mut chars: Vec<Source>) -> Vec<Source> {
             if start < end && end == out.len() {
                 out.push(source);
                 if !zero_width {
-                    merge_output(&mut chars, i + 1, &mut out, start, end + 1);
-                    out[start..=end].rotate_right(1);
+                    merge_output(&mut chars, i + 1, &mut out, start);
+                    // The merge leaves `out[start..]` one cluster, so this keeps the runs.
+                    out.chars[start..=end].rotate_right(1);
                 }
             } else if has(0x25CC).is_some() {
                 let circle = Source {
                     dotted_circle: true,
                     ..source
                 };
-                out.extend(if zero_width {
-                    [circle, source]
+                let (a, b) = if zero_width {
+                    (circle, source)
                 } else {
-                    [source, circle]
-                });
+                    (source, circle)
+                };
+                out.push(a);
+                out.push(b);
             } else {
                 out.push(source);
             }
@@ -386,7 +390,7 @@ fn preprocess_hangul(font: &Font, mut chars: Vec<Source>) -> Vec<Source> {
                         });
                     }
                     end = start + len;
-                    merge_output(&mut chars, i + len, &mut out, start, end);
+                    merge_output(&mut chars, i + len, &mut out, start);
                 }
                 i += len;
                 continue;
@@ -412,10 +416,12 @@ fn preprocess_hangul(font: &Font, mut chars: Vec<Source>) -> Vec<Source> {
                 let len = if t == 0 { 2 } else { 3 };
                 let found: Option<Vec<char>> = parts[..len].iter().map(|&p| has(p)).collect();
                 if let Some(found) = found {
-                    out.extend(found.iter().zip(jamo).map(|(&c, jamo)| Source {
-                        jamo,
-                        ..Source::new(c, cluster)
-                    }));
+                    for (&c, jamo) in found.iter().zip(jamo) {
+                        out.push(Source {
+                            jamo,
+                            ..Source::new(c, cluster)
+                        });
+                    }
                     i += 1;
                     end = start + len;
                     // An LV decomposed for the trailing jamo after it takes that jamo in.
@@ -427,7 +433,7 @@ fn preprocess_hangul(font: &Font, mut chars: Vec<Source>) -> Vec<Source> {
                         i += 1;
                         end += 1;
                     }
-                    merge_output(&mut chars, i, &mut out, start, end);
+                    merge_output(&mut chars, i, &mut out, start);
                     continue;
                 }
             }
@@ -438,14 +444,75 @@ fn preprocess_hangul(font: &Font, mut chars: Vec<Source>) -> Vec<Source> {
         out.push(source);
         i += 1;
     }
-    out
+    out.finish()
+}
+
+/// The output of [`preprocess_hangul`], with its clusters kept as runs. HarfBuzz's merges
+/// in that pass end at the end of the output and extend over whole runs of one cluster, so
+/// each relabels a tail of runs; relabelling character by character would be quadratic
+/// (right to left, every pair of jamo joins two graphemes, so one cluster keeps growing).
+/// Neighbouring runs never share a cluster, and the clusters in `chars` are only written
+/// by [`Output::finish`].
+struct Output {
+    chars: Vec<Source>,
+    /// Each run's first index and cluster.
+    runs: Vec<(usize, usize)>,
+}
+
+impl Output {
+    fn with_capacity(n: usize) -> Self {
+        Self {
+            chars: Vec::with_capacity(n),
+            runs: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.chars.len()
+    }
+
+    fn push(&mut self, s: Source) {
+        if self.last_cluster() != Some(s.cluster) {
+            self.runs.push((self.chars.len(), s.cluster));
+        }
+        self.chars.push(s);
+    }
+
+    fn last_cluster(&self) -> Option<usize> {
+        self.runs.last().map(|&(_, cluster)| cluster)
+    }
+
+    /// The run holding `chars[i]`.
+    fn run_of(&self, i: usize) -> usize {
+        self.runs.partition_point(|&(first, _)| first <= i) - 1
+    }
+
+    /// Gives everything from the start of run `run` on the cluster `cluster`.
+    fn relabel_from(&mut self, run: usize, cluster: usize) {
+        let first = self.runs[run].0;
+        self.runs.truncate(run);
+        if self.last_cluster() != Some(cluster) {
+            self.runs.push((first, cluster));
+        }
+    }
+
+    fn finish(self) -> Vec<Source> {
+        let Self { mut chars, runs } = self;
+        let ends = runs.iter().skip(1).map(|&(first, _)| first);
+        for (&(first, cluster), end) in runs.iter().zip(ends.chain([chars.len()])) {
+            for s in &mut chars[first..end] {
+                s.cluster = cluster;
+            }
+        }
+        chars
+    }
 }
 
 /// HarfBuzz's `merge_clusters` during a pass that reads `chars` from `idx` and has put out
 /// `out`: `chars[start..end]` take the smallest of their clusters, and so do the unread
 /// characters next to them that share the cluster of the first or last, and the output
 /// before them when the merge reaches `idx`.
-fn merge_input(chars: &mut [Source], idx: usize, out: &mut [Source], start: usize, end: usize) {
+fn merge_input(chars: &mut [Source], idx: usize, out: &mut Output, start: usize, end: usize) {
     let (mut start, mut end) = (start, end);
     if end - start < 2 {
         return;
@@ -466,40 +533,30 @@ fn merge_input(chars: &mut [Source], idx: usize, out: &mut [Source], start: usiz
         }
     }
     let first = chars[start].cluster;
-    if idx == start && first != cluster {
-        for s in out.iter_mut().rev().take_while(|s| s.cluster == first) {
-            s.cluster = cluster;
-        }
+    if idx == start && first != cluster && out.last_cluster() == Some(first) {
+        out.relabel_from(out.runs.len() - 1, cluster);
     }
     for s in &mut chars[start..end] {
         s.cluster = cluster;
     }
 }
 
-/// HarfBuzz's `merge_out_clusters`, the same for `out[start..end]`: the output next to them
-/// that shares a cluster with the first or last joins in, and so do the unread characters
-/// from `idx` when the merge reaches the end of the output.
-fn merge_output(chars: &mut [Source], idx: usize, out: &mut [Source], start: usize, end: usize) {
-    let (mut start, mut end) = (start, end);
-    if end - start < 2 {
+/// HarfBuzz's `merge_out_clusters` for `out[start..]`: they take the smallest of their
+/// clusters, and so does the output before them that shares the first one's cluster (the
+/// rest of its run) and the unread characters from `idx` that share the last one's.
+fn merge_output(chars: &mut [Source], idx: usize, out: &mut Output, start: usize) {
+    if out.len() - start < 2 {
         return;
     }
-    let cluster = out[start..end].iter().map(|s| s.cluster).min().unwrap_or(0);
-    while start > 0 && out[start - 1].cluster == out[start].cluster {
-        start -= 1;
-    }
-    while end < out.len() && out[end - 1].cluster == out[end].cluster {
-        end += 1;
-    }
-    if end == out.len() {
-        let last = out[end - 1].cluster;
+    let run = out.run_of(start);
+    // At most one run per character of the merge, a syllable and a tone mark.
+    let cluster = out.runs[run..].iter().map(|&(_, c)| c).min().unwrap_or(0);
+    if let Some(last) = out.last_cluster() {
         for s in chars[idx..].iter_mut().take_while(|s| s.cluster == last) {
             s.cluster = cluster;
         }
     }
-    for s in &mut out[start..end] {
-        s.cluster = cluster;
-    }
+    out.relabel_from(run, cluster);
 }
 
 struct Mapper<'a> {
@@ -546,8 +603,10 @@ impl Mapper<'_> {
                 jamo,
                 mirrored,
                 cluster,
-                ..
+                dotted_circle,
             } = group[i];
+            // A tone mark's dotted circle is looked up as U+25CC; it keeps the mark as `c`.
+            let lookup = if dotted_circle { '\u{25CC}' } else { c };
             self.cluster = cluster;
             self.jamo = jamo;
             self.mirrored = mirrored;
@@ -557,20 +616,20 @@ impl Mapper<'_> {
                 .map(|s| s.c)
                 .filter(|&s| is_variation_selector(s))
             else {
-                let glyph = nominal(self, c);
+                let glyph = nominal(self, lookup);
                 self.push(c, glyph, 0);
                 continue;
             };
             let selector_cluster = group[i].cluster;
             i += 1;
-            match self.font.glyph_variant(c, selector) {
+            match self.font.glyph_variant(lookup, selector) {
                 Some(glyph) => {
                     // HarfBuzz replaces the pair, merging their clusters.
                     self.cluster = cluster.min(selector_cluster);
                     self.push(c, glyph.0, 0);
                 }
                 None => {
-                    let glyph = nominal(self, c);
+                    let glyph = nominal(self, lookup);
                     self.push(c, glyph, 0);
                     self.jamo = 0;
                     self.cluster = selector_cluster;

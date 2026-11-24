@@ -1965,7 +1965,16 @@ fn review_cases_shape_like_harfbuzz() {
         [(V_NAK, 0, 500, 0, 0), (V_ACUTE, 0, 0, 0, 0)]
     );
     // A tone mark with no syllable before it gets a dotted circle that keeps the mark's
-    // combining class, so the acute before them sorts after both.
+    // combining class, so the acute before them sorts after both. The circle is still
+    // looked up as U+25CC, also with a variation selector after it.
+    assert_eq!(
+        shaped("\u{302E}\u{FE0F}", '\u{B098}', &[], Ltr),
+        [
+            (V_TONE, 0, 500, 0, 0),
+            (V_CIRCLE, 0, 500, 0, 0),
+            (SPACE_GLYPH, 0, 0, 0, 0)
+        ]
+    );
     assert_eq!(
         shaped("\u{B098}\u{301}\u{302E}", '\u{B098}', &[], Ltr),
         [
@@ -1975,6 +1984,26 @@ fn review_cases_shape_like_harfbuzz() {
             (V_ACUTE, 0, 0, 0, 0)
         ]
     );
+}
+
+/// Right to left, each pair of jamo HarfBuzz forms joins two graphemes, so the clusters
+/// merge into one (HarfBuzz keeps a cluster per pair, splitting graphemes), in linear time.
+#[test]
+fn right_to_left_jamo_merge_in_linear_time() {
+    let font = Font::from_data(review_font_data(), 0).expect("the font parses");
+    let options = ShapeOptions {
+        script: Script::of('\u{B098}'),
+        direction: Direction::RightToLeft,
+        ..latin()
+    };
+    let glyphs = run(&font, &"\u{1100}\u{1161}".repeat(2), &options);
+    assert_eq!(ids(&glyphs), [11, 10, 11, 10]);
+    assert_eq!(clusters(&glyphs), [0, 0, 0, 0]);
+    let started = std::time::Instant::now();
+    let glyphs = run(&font, &"\u{1100}\u{1161}".repeat(200_000), &options);
+    assert_eq!(glyphs.len(), 400_000);
+    assert!(glyphs.iter().all(|g| g.cluster == 0));
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
 }
 
 /// Font fallback counts what shaping draws for Hebrew: a font without GPOS marks composes
