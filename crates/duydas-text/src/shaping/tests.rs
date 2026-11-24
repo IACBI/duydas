@@ -380,7 +380,8 @@ fn grapheme_joiners_are_not_marks_without_gdef() {
 
 /// A font covers a letter and its marks when shaping composes them into a glyph it has, so
 /// fallback picks the font that draws é over one with only e, and the font with 가 over
-/// one with only its first jamo.
+/// one with only its first jamo. Coverage follows what shaping maps, so a font that would
+/// decompose é does not cover it before a variation selector.
 #[test]
 fn fallback_counts_composed_glyphs() {
     let font = |map: &[(u32, u32, u32)]| {
@@ -394,6 +395,15 @@ fn fallback_counts_composed_glyphs() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].font, 1);
     assert_eq!(ids(&run(&precomposed, "e\u{301}", &latin())), [2]);
+
+    // Before a variation selector é is not decomposed, so a font with e and U+0301 but no é
+    // does not cover it (HarfBuzz 10.4.0 draws .notdef there too).
+    let decomposed = font(&[(0x65, 0x65, 1), (0x301, 0x301, 2)]);
+    assert_eq!(ids(&run(&decomposed, "\u{E9}\u{FE0F}", &latin()))[0], 0);
+    let runs = itemize("\u{E9}\u{FE0F}", &[&decomposed, &precomposed]);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].font, 1);
+    assert_eq!(itemize("\u{E9}", &[&decomposed, &precomposed])[0].font, 0);
 
     // Hangul jamo count as covered by a font with the syllable they compose into.
     let only_l = font(&[(0x1100, 0x1100, 1)]);

@@ -250,8 +250,9 @@ pub struct Run {
 ///
 /// Each grapheme cluster gets the first font in `fonts` that covers all its characters
 /// (default-ignorable characters and variation selectors aside; a character also counts as
-/// covered when the font has its canonical decomposition, and a letter with marks when
-/// shaping composes them into a glyph the font has, such as e and U+0301 into é). A cluster of Common or Inherited
+/// covered when the font has its canonical decomposition, unless a variation selector
+/// follows it, and a letter with marks when shaping composes them into a glyph the font has,
+/// such as e and U+0301 into é). A cluster of Common or Inherited
 /// characters, such as a space or a digit, stays with the font before it when that font
 /// covers it. A cluster no font covers goes to the first font that has its first character,
 /// so a letter keeps its font when only a mark after it is missing; failing that, it stays
@@ -335,10 +336,17 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
 /// or as shaping maps them, composing a letter and its marks (or Hangul jamo, for Hangul
 /// text) into a glyph the font has.
 fn covers(font: &Font, grapheme: &str, hangul: bool) -> bool {
-    covers_each(font, grapheme)
-        || normalize(font, grapheme, hangul)
+    let mapped = || {
+        normalize(font, grapheme, hangul)
             .iter()
             .all(|ch| ch.glyph != 0 || char_info(ch.c) & DEFAULT_IGNORABLE != 0)
+    };
+    // A letter before a variation selector maps as it is, never decomposed (as in
+    // HarfBuzz), so only what shaping maps counts.
+    if grapheme.chars().any(is_variation_selector) {
+        return mapped();
+    }
+    covers_each(font, grapheme) || mapped()
 }
 
 fn covers_each(font: &Font, grapheme: &str) -> bool {
