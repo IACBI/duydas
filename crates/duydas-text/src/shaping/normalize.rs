@@ -67,12 +67,6 @@ pub(super) enum Shaper {
     },
 }
 
-impl Shaper {
-    pub(super) fn of(hangul: bool) -> Self {
-        if hangul { Self::Hangul } else { Self::Default }
-    }
-}
-
 /// More combining marks in a row than this are left in their order, as in HarfBuzz.
 const MAX_COMBINING_MARKS: usize = 32;
 
@@ -151,9 +145,10 @@ pub(super) fn composition(a: char, b: char) -> Option<char> {
 /// characters the font has are not decomposed or composed.
 ///
 /// In right-to-left text (`mirror`), a character with a mirror image the font has is
-/// replaced by it first, as HarfBuzz does. With `reverse`, the grapheme clusters are taken
-/// in reverse order (their characters keep theirs), as HarfBuzz does to shape text in its
-/// script's direction.
+/// replaced by it first, as HarfBuzz does. As in HarfBuzz, the characters of one of its
+/// grapheme clusters (see [`continuations`]) take the cluster of the first. With `reverse`,
+/// those clusters are taken in reverse order (their characters keep theirs), as HarfBuzz
+/// does to shape text in its script's direction.
 pub(super) fn normalize(
     font: &Font,
     text: &str,
@@ -162,7 +157,9 @@ pub(super) fn normalize(
     reverse: bool,
 ) -> Vec<Char> {
     let hangul = shaper == Shaper::Hangul;
-    let mut chars: Vec<Source> = Vec::with_capacity(text.len());
+    // Bytes bound the characters; the cap keeps a huge run from reserving more than it needs
+    // (four-byte characters) or more than a 32-bit target can address up front.
+    let mut chars: Vec<Source> = Vec::with_capacity(text.len().min(1 << 16));
     let mut start = 0;
     for grapheme in crate::graphemes(text) {
         chars.extend(grapheme.chars().map(|c| {
@@ -176,8 +173,14 @@ pub(super) fn normalize(
         }));
         start += grapheme.len();
     }
+    let continues = continuations(&chars);
+    for i in 1..chars.len() {
+        if continues[i] {
+            chars[i].cluster = chars[i - 1].cluster;
+        }
+    }
     if reverse {
-        chars = reverse_graphemes(&chars);
+        chars = reverse_graphemes(&chars, &continues);
     }
     if hangul {
         chars = preprocess_hangul(font, &chars);
@@ -185,19 +188,12 @@ pub(super) fn normalize(
     let mut out = Vec::with_capacity(chars.len());
     let mut rest = &chars[..];
     while let Some(cluster) = rest.first().map(|s| s.cluster) {
-        // HarfBuzz decomposes a base with the marks after it together. A grapheme cluster
-        // that starts with a mark (at the start of the text, after a control character, or
-        // after a base once right-to-left text is reversed) goes with the one before it.
-        let run = |at: usize| {
-            rest[at..]
-                .iter()
-                .take_while(|s| s.cluster == rest[at].cluster)
-                .count()
-        };
-        let mut len = run(0);
-        while len < rest.len() && char_info(rest[len].c) & MARK != 0 {
-            len += run(len);
-        }
+        // As HarfBuzz, a character and the marks right after it are decomposed together,
+        // whatever the grapheme clusters: a base before a joiner is on its own.
+        let len = 1 + rest[1..]
+            .iter()
+            .take_while(|s| char_info(s.c) & MARK != 0)
+            .count();
         let (group, tail) = rest.split_at(len);
         rest = tail;
         let mut mapper = Mapper {
@@ -241,12 +237,12 @@ pub(super) fn normalize(
     out
 }
 
-/// Reverses the order of HarfBuzz's grapheme clusters, each keeping its characters in
-/// order. They are not Unicode's: a character continues the one before only if it is a
-/// mark, ZWJ (or Extended_Pictographic after ZWJ), an emoji modifier, the second regional
-/// indicator of a pair, a halfwidth katakana sound mark or a tag. A ZWNJ or a Hangul vowel
-/// jamo starts one of its own.
-fn reverse_graphemes(chars: &[Source]) -> Vec<Source> {
+/// Whether each character continues HarfBuzz's grapheme cluster before it. They are not
+/// Unicode's: a character continues the one before only if it is a mark, ZWJ (or
+/// Extended_Pictographic after ZWJ), an emoji modifier, the second regional indicator of a
+/// pair, a halfwidth katakana sound mark or a tag. A ZWNJ or a Hangul vowel jamo starts one
+/// of its own; a mark after a control character, or an emoji after a ZWJ, does not.
+fn continuations(chars: &[Source]) -> Vec<bool> {
     let regional = |c: char| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c);
     let mut continues: Vec<bool> = Vec::with_capacity(chars.len());
     for (i, s) in chars.iter().enumerate() {
@@ -267,6 +263,12 @@ fn reverse_graphemes(chars: &[Source]) -> Vec<Source> {
             });
         continues.push(continuation);
     }
+    continues
+}
+
+/// Reverses the order of HarfBuzz's grapheme clusters (`continues`, from [`continuations`]),
+/// each keeping its characters in order.
+fn reverse_graphemes(chars: &[Source], continues: &[bool]) -> Vec<Source> {
     let mut out = Vec::with_capacity(chars.len());
     let mut end = chars.len();
     for start in (1..chars.len()).rev() {
@@ -435,14 +437,11 @@ impl Mapper<'_> {
         self.font.glyph_index(c).map(|g| g.0)
     }
 
-    /// Maps characters of one grapheme cluster. One with marks is decomposed as far as the
-    /// font allows, so its marks can be reordered and composed again; others keep the
-    /// characters the font has.
+    /// Maps a character and the marks after it. With marks they are decomposed as far as the
+    /// font allows, so the marks can be reordered and composed again; a character alone (a
+    /// mark too, at the start of the text) keeps what the font has, as in HarfBuzz.
     fn cluster(&mut self, group: &[Source], hangul: bool) {
-        let shortest = hangul
-            || !group
-                .iter()
-                .any(|s| char_info(s.c) & MARK != 0 || combining_class(s.c) != 0);
+        let shortest = hangul || group.len() == 1;
         for s in group {
             self.cluster = s.cluster;
             self.jamo = s.jamo;

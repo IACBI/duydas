@@ -265,9 +265,12 @@ fn position_around_base(
             continue;
         }
         if components > 1 {
-            // HarfBuzz's unsigned arithmetic: a mark that follows no component takes the last.
+            // HarfBuzz's signed arithmetic: a mark of another ligature, or past the last
+            // component, takes the last; one whose component wrapped to 0 (four bits are
+            // kept) stays at -1, a component's width before the ligature (after, right to
+            // left).
             let mut component = i32::from(info[i].lig_comp()) - 1;
-            if lig_id == 0 || lig_id != info[i].lig_id() || !(0..components).contains(&component) {
+            if lig_id == 0 || lig_id != info[i].lig_id() || component >= components {
                 component = components - 1;
             }
             if last_component != component {

@@ -190,6 +190,17 @@ impl Apply<'_, '_> {
         let i = self.prev_match(lookup, j, false, |info| !info.ignorable)?;
         let (exit_x, exit_y) = point(self.info[i].glyph, 2)?;
 
+        let (child, parent, y) = if lookup.flags & RIGHT_TO_LEFT != 0 {
+            (i, j, entry_y - exit_y)
+        } else {
+            (j, i, exit_y - entry_y)
+        };
+        // The chain the attachment reverses is walked twice, which the budget must cover
+        // before anything changes.
+        let chain = cursive_chain_len(self.pos, child, parent, self.limits.left() / 2)?;
+        if !self.limits.spend(2 * chain) {
+            return None;
+        }
         let pos = &mut *self.pos;
         if self.backward {
             let d = exit_x.wrapping_add(pos[i].x_offset);
@@ -203,12 +214,7 @@ impl Apply<'_, '_> {
             pos[j].x_offset = pos[j].x_offset.wrapping_sub(d);
         }
 
-        let (child, parent, y) = if lookup.flags & RIGHT_TO_LEFT != 0 {
-            (i, j, entry_y - exit_y)
-        } else {
-            (j, i, exit_y - entry_y)
-        };
-        let steps = reverse_cursive_chain(pos, child, parent);
+        reverse_cursive_chain(pos, child, parent);
         pos[child].attach_kind = ATTACH_CURSIVE;
         pos[child].attach = parent as i32 - child as i32;
         pos[child].y_offset = y;
@@ -216,7 +222,6 @@ impl Apply<'_, '_> {
             pos[parent].attach = 0;
             pos[parent].y_offset = 0;
         }
-        self.charge(steps);
         self.attached = true;
         Some(j + 1)
     }
@@ -408,7 +413,36 @@ impl Apply<'_, '_> {
 
 /// Before `child` attaches cursively to `new_parent`, turns its old chain around so the
 /// glyphs it was attached to hang from it instead (HarfBuzz `reverse_cursive_minor_offset`).
-fn reverse_cursive_chain(pos: &mut [Position], child: usize, new_parent: usize) -> usize {
+/// The length of the cursive chain from `child` that [`reverse_cursive_chain`] reverses, or
+/// None if it is longer than `cap`.
+fn cursive_chain_len(
+    pos: &[Position],
+    child: usize,
+    new_parent: usize,
+    cap: usize,
+) -> Option<usize> {
+    let mut len = 0;
+    let mut i = child;
+    while pos[i].attach != 0 && pos[i].attach_kind == ATTACH_CURSIVE && len < pos.len() {
+        let Some(j) = i
+            .checked_add_signed(pos[i].attach as isize)
+            .filter(|&j| j < pos.len())
+        else {
+            break;
+        };
+        len += 1;
+        if len > cap {
+            return None;
+        }
+        if j == new_parent {
+            break;
+        }
+        i = j;
+    }
+    Some(len)
+}
+
+fn reverse_cursive_chain(pos: &mut [Position], child: usize, new_parent: usize) {
     let mut chain = Vec::new();
     let mut i = child;
     while pos[i].attach != 0 && pos[i].attach_kind == ATTACH_CURSIVE && chain.len() < pos.len() {
@@ -433,7 +467,6 @@ fn reverse_cursive_chain(pos: &mut [Position], child: usize, new_parent: usize) 
         pos[j].attach = i as i32 - j as i32;
         pos[j].attach_kind = ATTACH_CURSIVE;
     }
-    chain.len()
 }
 
 /// Resolves attachments into offsets from the pen position: a mark moves with its base and

@@ -1283,6 +1283,8 @@ const R_TWO: u16 = 16;
 const R_SLASH: u16 = 17;
 const R_ONE_NUMR: u16 = 18;
 const R_TWO_DNOM: u16 = 19;
+const R_ONE_DNOM: u16 = 20;
+const R_TWO_NUMR: u16 = 21;
 
 /// A Hebrew font with layout tables for `hebr`: direction forms (`rtla`, `ltra`, and
 /// `rtlm` for the bracket, whose mirror image it lacks), fraction forms, cursive attachment
@@ -1304,7 +1306,7 @@ fn rtl_font_data() -> Vec<u8> {
             (0x2044, 0x2044, u32::from(R_SLASH)),
         ]),
     )]);
-    let classes: Vec<(u16, u16)> = (1..20)
+    let classes: Vec<(u16, u16)> = (1..22)
         .map(|g| match g {
             R_QAMATS | R_HIRIQ => (g, 3),
             _ => (g, 1),
@@ -1323,8 +1325,16 @@ fn rtl_font_data() -> Vec<u8> {
         vec![
             lookup(1, 0, vec![single(&[(R_GIMEL, R_GIMEL_RTLA)])]),
             lookup(1, 0, vec![single(&[(R_BRACKET, R_BRACKET_RTLM)])]),
-            lookup(1, 0, vec![single(&[(R_ONE, R_ONE_NUMR)])]),
-            lookup(1, 0, vec![single(&[(R_TWO, R_TWO_DNOM)])]),
+            lookup(
+                1,
+                0,
+                vec![single(&[(R_ONE, R_ONE_NUMR), (R_TWO, R_TWO_NUMR)])],
+            ),
+            lookup(
+                1,
+                0,
+                vec![single(&[(R_ONE, R_ONE_DNOM), (R_TWO, R_TWO_DNOM)])],
+            ),
             lookup(1, 0, vec![single(&[(R_GIMEL, R_GIMEL_LTRA)])]),
         ],
     );
@@ -1359,7 +1369,7 @@ fn rtl_font_data() -> Vec<u8> {
     );
     let advances = [
         500, 250, 500, 550, 600, 300, 250, 0, 0, 300, 300, 300, 310, 610, 590, 500, 500, 100, 400,
-        400,
+        400, 410, 420,
     ];
     let metrics: Vec<(u16, i16)> = advances.iter().map(|&a| (a, 0)).collect();
     tt_font(
@@ -1550,8 +1560,9 @@ fn right_to_left_runs_shape_like_harfbuzz() {
             (R_PAREN_RIGHT, 0, 300, 0, 0)
         ]
     );
-    // Digits alone stay left to right in a Hebrew run; right to left the fraction's
-    // numerator and denominator swap, as in HarfBuzz.
+    // Digits alone stay left to right in a Hebrew run. Right to left, the text stays in
+    // logical order while the features apply, so HarfBuzz gives the digits before the
+    // slash the denominator form and those after it the numerator form.
     assert_eq!(
         shaped("1\u{2044}2", Ltr),
         [
@@ -1563,9 +1574,9 @@ fn right_to_left_runs_shape_like_harfbuzz() {
     assert_eq!(
         shaped("1\u{2044}2", Rtl),
         [
-            (R_TWO, 4, 500, 0, 0),
+            (R_TWO_NUMR, 4, 420, 0, 0),
             (R_SLASH, 1, 100, 0, 0),
-            (R_ONE, 0, 500, 0, 0)
+            (R_ONE_DNOM, 0, 410, 0, 0)
         ]
     );
     assert_eq!(
@@ -1717,6 +1728,209 @@ fn runs_are_shaped_in_their_script_direction() {
     assert_eq!(clusters(&glyphs), [7, 3, 3, 0]);
 }
 
+// Glyphs of the review font.
+const V_BRACKET: u16 = 2;
+const V_ALEF: u16 = 3;
+const V_A: u16 = 4;
+const V_ACUTE: u16 = 5;
+const V_ANGSTROM: u16 = 6;
+const V_A_RING: u16 = 7;
+const V_DIAERESIS: u16 = 8;
+const V_GRIN: u16 = 9;
+const V_BRACKET_ALTERNATES: u16 = 12;
+const V_LIGATURE: u16 = 19;
+
+/// A font for corners of HarfBuzz's behaviour found in review: `rtlm` alternates for a
+/// bracket it has no mirror for, a ligature of 18 components that marks can follow (only
+/// four bits of a component are kept) and no GPOS, so marks fall back to the glyphs' boxes,
+/// the Angstrom sign and the letter it decomposes to, and an emoji and jamo.
+fn review_font_data() -> Vec<u8> {
+    let cmap = cmap_table(&[(
+        3,
+        10,
+        format12(&[
+            (0x20, 0x20, 1),
+            (0x5B, 0x5B, u32::from(V_BRACKET)),
+            (0x61, 0x61, u32::from(V_A)),
+            (0xC5, 0xC5, u32::from(V_A_RING)),
+            (0x301, 0x301, u32::from(V_ACUTE)),
+            (0x308, 0x308, u32::from(V_DIAERESIS)),
+            (0x5D0, 0x5D0, u32::from(V_ALEF)),
+            (0x1100, 0x1100, 10),
+            (0x1161, 0x1161, 11),
+            (0x212B, 0x212B, u32::from(V_ANGSTROM)),
+            (0x1F600, 0x1F600, u32::from(V_GRIN)),
+        ]),
+    )]);
+    let classes: Vec<(u16, u16)> = (1..20)
+        .map(|g| match g {
+            V_ACUTE | V_DIAERESIS => (g, 3),
+            V_LIGATURE => (g, 2),
+            _ => (g, 1),
+        })
+        .collect();
+    let alternates_of: Vec<u16> = (V_BRACKET_ALTERNATES..V_BRACKET_ALTERNATES + 7).collect();
+    let components = [V_A; 18];
+    let gsub = simple_table(
+        &[*b"liga", *b"rtlm"],
+        vec![
+            lookup(4, 8, vec![ligatures(&[(&components, V_LIGATURE)])]),
+            lookup(3, 0, vec![alternates(&[(V_BRACKET, &alternates_of)])]),
+        ],
+    );
+    let rect = |x0: i16, y0: i16, x1: i16, y1: i16| {
+        simple_glyph(&[&[
+            (x0, y0, true),
+            (x0, y1, true),
+            (x1, y1, true),
+            (x1, y0, true),
+        ]])
+    };
+    let mut glyphs = vec![Vec::new(), Vec::new()];
+    glyphs.extend((2..20).map(|g| match g {
+        V_ACUTE | V_DIAERESIS => rect(-150, 550, -50, 700),
+        V_LIGATURE => rect(0, 0, 1800, 700),
+        _ => rect(50, 0, 450, 500),
+    }));
+    let metrics: Vec<(u16, i16)> = (0..20u16)
+        .map(|g| match g {
+            1 => (250, 0),
+            V_ACUTE | V_DIAERESIS => (0, -150),
+            V_LIGATURE => (1800, 0),
+            _ => (500, 50),
+        })
+        .collect();
+    tt_font(
+        &glyphs,
+        &metrics,
+        &[
+            (b"cmap", cmap),
+            (b"GDEF", gdef(&classes, &[], &[])),
+            (b"GSUB", gsub),
+        ],
+    )
+}
+
+/// Corners found in review, checked against HarfBuzz 10.4.0 on the same font.
+#[test]
+fn review_cases_shape_like_harfbuzz() {
+    use Direction::{LeftToRight as Ltr, RightToLeft as Rtl};
+    let font = Font::from_data(review_font_data(), 0).expect("the font parses");
+    let shaped = |text: &str, script: char, features: &[Feature], direction| {
+        let options = ShapeOptions {
+            script: Script::of(script),
+            features,
+            direction,
+            ..ShapeOptions::default()
+        };
+        run(&font, text, &options)
+            .iter()
+            .map(|g| (g.glyph.0, g.cluster, g.x_advance, g.x_offset, g.y_offset))
+            .collect::<Vec<_>>()
+    };
+    // The bracket's mask gets rtlm's bit for value 1 whatever the value given, on top of
+    // the value the caller's setting gives every glyph: alternate 1, then 4 | 1 and 7 | 1.
+    let bracket = |n: u16| V_BRACKET_ALTERNATES + n - 1;
+    assert_eq!(
+        shaped("[\u{5D0}", '\u{5D0}', &[], Rtl),
+        [(V_ALEF, 1, 500, 0, 0), (bracket(1), 0, 500, 0, 0)]
+    );
+    for value in [4, 7] {
+        let rtlm = [Feature::new(*b"rtlm", value)];
+        assert_eq!(
+            shaped("[\u{5D0}", '\u{5D0}', &rtlm, Rtl),
+            [
+                (V_ALEF, 1, 500, 0, 0),
+                (bracket(value as u16 | 1), 0, 500, 0, 0)
+            ]
+        );
+    }
+    assert_eq!(
+        shaped("[\u{5D0}", '\u{5D0}', &[], Ltr),
+        [(V_BRACKET, 0, 500, 0, 0), (V_ALEF, 1, 500, 0, 0)]
+    );
+    // A mark after component 16 of 18 keeps component 0 (four bits), which fallback
+    // positioning takes as -1: a component's width before the ligature, after it right to
+    // left. After component 2 it sits over the second eighteenth.
+    let text = "a".repeat(16) + "\u{301}aa";
+    assert_eq!(
+        shaped(&text, 'a', &[], Ltr),
+        [(V_LIGATURE, 0, 1800, 0, 0), (V_ACUTE, 0, 0, -800, 212)]
+    );
+    assert_eq!(
+        shaped(&text, 'a', &[], Rtl),
+        [(V_LIGATURE, 0, 1800, 0, 0), (V_ACUTE, 0, 0, -1250, 212)]
+    );
+    let text = "aa\u{301}".to_string() + &"a".repeat(16);
+    assert_eq!(
+        shaped(&text, 'a', &[], Ltr),
+        [(V_LIGATURE, 0, 1800, 0, 0), (V_ACUTE, 0, 0, -350, 212)]
+    );
+    // A letter before a joiner is mapped on its own, so the Angstrom sign the font has is
+    // kept; before a mark it is decomposed so that the mark can compose.
+    assert_eq!(
+        shaped("\u{212B}\u{200D}\u{308}", 'a', &[], Ltr),
+        [
+            (V_ANGSTROM, 0, 500, 0, 0),
+            (SPACE_GLYPH, 0, 0, 0, 0),
+            (V_DIAERESIS, 0, 0, 350, -244)
+        ]
+    );
+    assert_eq!(
+        shaped("\u{212B}\u{308}", 'a', &[], Ltr),
+        [(V_A_RING, 0, 500, 0, 0), (V_DIAERESIS, 0, 0, -150, 12)]
+    );
+    // An emoji after ZWJ continues HarfBuzz's cluster though it starts a grapheme, so it
+    // joins the cluster before; right to left that keeps clusters from increasing.
+    assert_eq!(
+        shaped("a\u{200D}\u{1F600}", 'a', &[], Ltr),
+        [
+            (V_A, 0, 500, 0, 0),
+            (SPACE_GLYPH, 0, 0, 0, 0),
+            (V_GRIN, 0, 500, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("\u{1100}\u{1161}\u{200D}\u{1F600}", 'a', &[], Rtl),
+        [
+            (11, 0, 500, 0, 0),
+            (SPACE_GLYPH, 0, 0, 0, 0),
+            (V_GRIN, 0, 500, 0, 0),
+            (10, 0, 500, 0, 0)
+        ]
+    );
+}
+
+/// Font fallback counts what shaping draws for Hebrew: a font without GPOS marks composes
+/// a letter and its point into a presentation form, so it covers the pair through that
+/// form alone.
+#[test]
+fn itemizing_hebrew_counts_presentation_forms() {
+    let font = |ranges: &[(u32, u32, u32)]| {
+        let cmap = cmap_table(&[(3, 10, format12(ranges))]);
+        let data = tt_font(
+            &vec![Vec::new(); 3],
+            &[(500, 0), (250, 0), (600, 0)],
+            &[(b"cmap", cmap)],
+        );
+        Font::from_data(data, 0).expect("the font parses")
+    };
+    let letters = font(&[(0x20, 0x20, 1), (0x5D0, 0x5D0, 2)]);
+    let forms = font(&[(0x20, 0x20, 1), (0xFB2E, 0xFB2E, 2)]);
+    let fonts = [&letters, &forms];
+    let runs = itemize("\u{5D0}\u{5B7}", &fonts);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].font, 1);
+    let options = ShapeOptions {
+        script: runs[0].script,
+        direction: Direction::RightToLeft,
+        ..ShapeOptions::default()
+    };
+    assert_eq!(ids(&run(&forms, "\u{5D0}\u{5B7}", &options)), [2]);
+    // A letter alone stays with the first font.
+    assert_eq!(itemize("\u{5D0}", &fonts)[0].font, 0);
+}
+
 /// Writes the fixture fonts into the directory named by DUYDAS_FIXTURE_DIR, to check the
 /// expectations above against another shaper.
 #[test]
@@ -1736,6 +1950,7 @@ fn write_fixtures_for_comparison() {
         ("extents.ttf", extents_font_data()),
         ("joiner.ttf", joiner_font_data()),
         ("rtl.ttf", rtl_font_data()),
+        ("review.ttf", review_font_data()),
         ("hebrew.ttf", old_hebrew_font_data(false, false)),
         ("hebrew-cross.ttf", old_hebrew_font_data(true, false)),
         ("hebrew-latin-marks.ttf", old_hebrew_font_data(false, true)),

@@ -199,25 +199,7 @@ fn shape_with_limits(
 
     let scripts: Vec<[u8; 4]> = script.into_iter().collect();
     let language = options.language.opentype_tags();
-    // In HarfBuzz's order: the defaults with the shaper's features, then the caller's; a
-    // tag's last setting wins. The Hangul shaper then turns calt off whatever the caller
-    // said, as Uniscribe does (some CJK fonts put jamo lookups there).
-    let mut requests: Vec<Request> = vec![RVRN];
-    requests.extend(if rtl { RTL_FEATURES } else { LTR_FEATURES });
-    requests.extend(DEFAULT_FEATURES);
-    if hangul {
-        requests.extend(HANGUL_FEATURES);
-    }
-    requests.extend(COMMON_FEATURES);
-    requests.extend(
-        options
-            .features
-            .iter()
-            .map(|f| Request::global(f.tag, f.value)),
-    );
-    if hangul {
-        requests.push(Request::global(*b"calt", 0));
-    }
+    let requests = requests(hangul, rtl, options.features);
     let simple = !hangul && options.features.is_empty();
     let plan = layout::plan(&tables, &scripts, language, &requests, simple);
 
@@ -278,7 +260,8 @@ fn shape_with_limits(
         .collect();
 
     let jamo = [*b"ljmo", *b"vjmo", *b"tjmo"].map(|tag| plan.one_mask(tag));
-    let rtlm = if rtl { plan.mask(*b"rtlm") } else { 0 };
+    // HarfBuzz sets only the bit for value 1, whatever value the caller gave rtlm.
+    let rtlm = if rtl { plan.one_mask(*b"rtlm") } else { 0 };
     for (g, ch) in info.iter_mut().zip(&chars) {
         g.mask = plan.global_mask;
         if let Some(&mask) = usize::from(ch.jamo)
@@ -357,6 +340,43 @@ fn shape_with_limits(
         pos.reverse();
     }
     (output(font, &info, &pos), limits)
+}
+
+/// The features HarfBuzz requests for a run, in its order: the defaults with the shaper's
+/// features, then the caller's, a tag's last setting winning. The Hangul shaper then turns
+/// calt off whatever the caller said, as Uniscribe does (some CJK fonts put jamo lookups
+/// there).
+fn requests(hangul: bool, rtl: bool, features: &[Feature]) -> Vec<Request> {
+    let mut requests: Vec<Request> = vec![RVRN];
+    requests.extend(if rtl { RTL_FEATURES } else { LTR_FEATURES });
+    requests.extend(DEFAULT_FEATURES);
+    if hangul {
+        requests.extend(HANGUL_FEATURES);
+    }
+    requests.extend(COMMON_FEATURES);
+    requests.extend(features.iter().map(|f| Request::global(f.tag, f.value)));
+    if hangul {
+        requests.push(Request::global(*b"calt", 0));
+    }
+    requests
+}
+
+/// The Hebrew shaper `shape` uses for `font` with no features, in the default language:
+/// points compose into presentation forms unless the font has a `mark` feature for the
+/// script it picks.
+fn hebrew_shaper(font: &Font) -> Shaper {
+    let tables = font.layout_tables();
+    let language = Language::default().opentype_tags();
+    let plan = layout::plan(
+        &tables,
+        &[*b"hebr"],
+        language,
+        &requests(false, false, &[]),
+        true,
+    );
+    Shaper::Hebrew {
+        gpos_mark: plan.one_mask(*b"mark") != 0,
+    }
 }
 
 /// Whether `text` has digits or regional indicators and no letters, which HarfBuzz shapes

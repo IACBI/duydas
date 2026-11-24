@@ -8,8 +8,8 @@
 //! Like the rest of the crate it works on byte offsets into UTF-8 text: levels are given per
 //! byte. Explicit embedding and override characters and boundary neutrals, which the algorithm
 //! sets aside (rule X9), take the level of the character before them, so they stay next to it
-//! (UAX #9, section 5.2). Mirroring (L4) is left to shaping, which uses [`mirror`]; combining
-//! marks stay after their base in each run (L3 does not apply to glyph runs).
+//! (UAX #9, section 5.2). Mirroring (L4) is left to shaping, which uses [`mirror`]. Rule L3
+//! does not apply: shaping places each combining mark on its base, in either direction.
 //!
 //! The algorithm passes every case of the Unicode conformance tests BidiTest.txt and
 //! BidiCharacterTest.txt.
@@ -160,18 +160,16 @@ impl<'a> Bidi<'a> {
     pub fn line_levels(&self, line: Range<usize>) -> Vec<u8> {
         let line = self.clamp(line);
         let mut levels = self.levels[line.clone()].to_vec();
-        for paragraph in &self.paragraphs {
-            let start = paragraph.range.start.max(line.start);
-            let end = paragraph.range.end.min(line.end);
-            if start >= end {
-                continue;
-            }
+        let mut reset = Vec::new();
+        for (paragraph, part) in self.parts(&line) {
+            let text = &self.text[part.clone()];
             // Walks back from the end, so a trailing run of whitespace is found first.
+            reset.clear();
+            reset.resize(text.len(), false);
             let mut trailing = true;
-            for (i, c) in self.text[start..end].char_indices().rev() {
-                let at = start + i - line.start;
+            for (i, c) in text.char_indices().rev() {
                 let class = bidi_class(c);
-                let reset = match class {
+                reset[i] = match class {
                     BidiClass::S | BidiClass::B => {
                         trailing = true;
                         true
@@ -182,9 +180,23 @@ impl<'a> Bidi<'a> {
                         false
                     }
                 };
-                if reset {
+                if reset[i] {
+                    let at = part.start + i - line.start;
                     levels[at..at + c.len_utf8()].fill(paragraph.level);
                 }
+            }
+            // The characters X9 sets aside stay with the character before them when L1 has
+            // moved it (a tab before a soft hyphen, say), unless L1 reset them too.
+            let mut before: Option<u8> = None;
+            for (i, c) in text.char_indices() {
+                let at = part.start + i - line.start;
+                if let Some(level) = before
+                    && !reset[i]
+                    && is_removed(bidi_class(c))
+                {
+                    levels[at..at + c.len_utf8()].fill(level);
+                }
+                before = Some(levels[at]);
             }
         }
         levels
@@ -196,25 +208,52 @@ impl<'a> Bidi<'a> {
     pub fn visual_runs(&self, line: Range<usize>) -> Vec<VisualRun> {
         let line = self.clamp(line);
         let levels = self.line_levels(line.clone());
-        let mut runs: Vec<VisualRun> = Vec::new();
-        for (i, &level) in levels.iter().enumerate() {
-            match runs.last_mut() {
-                Some(run) if run.level == level => run.range.end = line.start + i + 1,
-                _ => runs.push(VisualRun {
-                    range: line.start + i..line.start + i + 1,
-                    level,
-                }),
+        let mut out = Vec::new();
+        // Each paragraph is reordered on its own; a line that spans paragraphs shows them
+        // in order.
+        for (_, part) in self.parts(&line) {
+            let mut runs: Vec<VisualRun> = Vec::new();
+            for at in part {
+                let level = levels[at - line.start];
+                match runs.last_mut() {
+                    Some(run) if run.level == level => run.range.end = at + 1,
+                    _ => runs.push(VisualRun {
+                        range: at..at + 1,
+                        level,
+                    }),
+                }
             }
+            let run_levels: Vec<u8> = runs.iter().map(|r| r.level).collect();
+            let order = visual_order(&run_levels);
+            let mut slots: Vec<Option<VisualRun>> = runs.into_iter().map(Some).collect();
+            out.extend(order.into_iter().filter_map(|i| slots[i].take()));
         }
-        let run_levels: Vec<u8> = runs.iter().map(|r| r.level).collect();
-        let order = visual_order(&run_levels);
-        let mut slots: Vec<Option<VisualRun>> = runs.into_iter().map(Some).collect();
-        order.into_iter().filter_map(|i| slots[i].take()).collect()
+        out
     }
 
     fn clamp(&self, line: Range<usize>) -> Range<usize> {
         let end = crate::floor_boundary(self.text, line.end);
         crate::floor_boundary(self.text, line.start).min(end)..end
+    }
+
+    /// The paragraphs a clamped line overlaps, each with the line's bytes in it, found by
+    /// binary search so that laying out many lines stays linear.
+    fn parts<'s>(
+        &'s self,
+        line: &Range<usize>,
+    ) -> impl Iterator<Item = (&'s Paragraph, Range<usize>)> + 's {
+        let line = line.clone();
+        let first = self
+            .paragraphs
+            .partition_point(|p| p.range.end <= line.start);
+        self.paragraphs[first..]
+            .iter()
+            .take_while(move |p| p.range.start < line.end)
+            .map(move |p| {
+                let part = p.range.start.max(line.start)..p.range.end.min(line.end);
+                (p, part)
+            })
+            .filter(|(_, part)| !part.is_empty())
     }
 }
 
@@ -222,10 +261,14 @@ impl<'a> Bidi<'a> {
 /// formatting characters, and the characters rule X9 sets aside, which go with them.
 fn is_trailing_whitespace(class: BidiClass) -> bool {
     use BidiClass::*;
-    matches!(
-        class,
-        Ws | Fsi | Lri | Rli | Pdi | Bn | Lre | Lro | Rle | Rlo | Pdf
-    )
+    matches!(class, Ws | Fsi | Lri | Rli | Pdi) || is_removed(class)
+}
+
+/// Whether rule X9 sets characters of this class aside: explicit embeddings and overrides,
+/// their terminator, and boundary neutrals.
+fn is_removed(class: BidiClass) -> bool {
+    use BidiClass::*;
+    matches!(class, Bn | Lre | Lro | Rle | Rlo | Pdf)
 }
 
 /// The display order of items with these embedding levels (rule L2): the index of the item
@@ -765,6 +808,19 @@ fn bracket_pairs(
             stack.truncate(depth);
         }
     }
-    pairs.sort_unstable();
+    // Found in order of their closing brackets; put in order of the opening ones without
+    // a sort, which would make many pairs cost more than linear time.
+    if pairs.len() > 1 {
+        let mut closing = vec![usize::MAX; seq.len()];
+        for &(open, close) in &pairs {
+            closing[open] = close;
+        }
+        pairs.clear();
+        pairs.extend(
+            (0..seq.len())
+                .filter(|&k| closing[k] != usize::MAX)
+                .map(|k| (k, closing[k])),
+        );
+    }
     pairs
 }

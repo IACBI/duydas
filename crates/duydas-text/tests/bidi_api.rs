@@ -107,6 +107,10 @@ fn lines_across_paragraphs_use_each_paragraph_level() {
     let text = "abc \n\u{5D0} ";
     let bidi = Bidi::new(text, None);
     assert_eq!(bidi.line_levels(0..text.len()), [0, 0, 0, 0, 0, 1, 1, 1]);
+    // Each paragraph is reordered on its own: two right-to-left paragraphs stay in order.
+    let text = "\u{5D0}\r\n\u{5D1}";
+    let bidi = Bidi::new(text, None);
+    assert_eq!(runs(&bidi, 0..text.len()), [(0..4, 1), (4..6, 1)]);
 }
 
 #[test]
@@ -119,6 +123,12 @@ fn removed_characters_take_the_level_before_them() {
     // At the end of a line they are whitespace for rule L1.
     let bidi = Bidi::new("a\u{202B}b\u{202C}", None);
     assert_eq!(bidi.line_levels(0..8), [0, 0, 0, 0, 2, 0, 0, 0]);
+    // Elsewhere they follow the character before them, also when L1 has reset it: the soft
+    // hyphen stays with the tab rather than move with the Hebrew after it.
+    let text = "\u{202B}\t\u{AD}\u{5D0}";
+    let bidi = Bidi::new(text, Some(Direction::LeftToRight));
+    assert_eq!(bidi.levels()[3..6], [1, 1, 1]);
+    assert_eq!(bidi.line_levels(0..text.len()), [0, 0, 0, 0, 0, 0, 1, 1]);
     // An isolate's text is resolved on its own.
     let text = "\u{5D0} \u{2066}abc\u{2069}";
     let bidi = Bidi::new(text, None);
@@ -188,6 +198,18 @@ fn long_text_takes_linear_time() {
     assert_eq!(Bidi::new(&deep, None).levels().len(), deep.len());
     let open = "\u{2067}a".repeat(100_000);
     assert_eq!(Bidi::new(&open, None).levels().len(), open.len());
+    // Many bracket pairs in one sequence, and many paragraphs laid out line by line.
+    let pairs = "(())\u{5D0}".repeat(50_000);
+    assert_eq!(Bidi::new(&pairs, None).levels().len(), pairs.len());
+    let lines = "a\u{5D0}\n".repeat(100_000);
+    let bidi = Bidi::new(&lines, None);
+    let shown: usize = bidi
+        .paragraphs()
+        .iter()
+        .map(|p| bidi.visual_runs(p.range.clone()).len())
+        .sum();
+    // a, alef, and the line feed at the paragraph level: three runs a line.
+    assert_eq!(shown, 300_000);
     assert!(started.elapsed() < std::time::Duration::from_secs(60));
 }
 
@@ -261,15 +283,21 @@ fn random_text_keeps_the_invariants() {
                 covered.iter().map(|r| r.len()).sum::<usize>(),
                 line_levels.len()
             );
-            // The runs of one level, in visual order, are those visual_order gives.
-            let logical: Vec<u8> = covered
-                .iter()
-                .map(|r| runs.iter().find(|v| v.range == *r).map_or(0, |v| v.level))
-                .collect();
-            let shown: Vec<_> = visual_order(&logical)
-                .into_iter()
-                .map(|i| covered[i].clone())
-                .collect();
+            // The runs of each paragraph, in visual order, are those visual_order gives, and
+            // the paragraphs keep their order.
+            let mut shown = Vec::new();
+            for p in bidi.paragraphs() {
+                let mine: Vec<_> = covered
+                    .iter()
+                    .filter(|r| p.range.contains(&r.start))
+                    .cloned()
+                    .collect();
+                let logical: Vec<u8> = mine
+                    .iter()
+                    .map(|r| runs.iter().find(|v| v.range == *r).map_or(0, |v| v.level))
+                    .collect();
+                shown.extend(visual_order(&logical).into_iter().map(|i| mine[i].clone()));
+            }
             assert_eq!(
                 shown,
                 runs.iter().map(|r| r.range.clone()).collect::<Vec<_>>()

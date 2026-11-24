@@ -1186,11 +1186,17 @@ impl Limits {
         }
     }
 
-    /// Spends `steps`; false if the budget had run out before.
+    /// Spends `steps` for a pass over many glyphs, which may only start when the budget
+    /// covers all of it; false, with the budget spent, if it does not.
     pub(crate) fn spend(&self, steps: usize) -> bool {
         let left = self.budget.get();
         self.budget.set(left.saturating_sub(steps));
-        left > 0
+        left >= steps && left > 0
+    }
+
+    /// The steps left.
+    pub(crate) fn left(&self) -> usize {
+        self.budget.get()
     }
 
     /// Whether the budget ran out.

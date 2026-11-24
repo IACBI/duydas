@@ -6,6 +6,7 @@ name: Unicode
 on:
   pull_request:
     paths:
+      - xtask/src/main.rs
       - xtask/src/unicode.rs
       - crates/duydas-text/src/tables.rs
       - crates/duydas-text/src/shaping_tables.rs

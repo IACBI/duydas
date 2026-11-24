@@ -1234,3 +1234,15 @@ fn cursive_attachment_joins_exit_to_entry() {
         [(500, 0, 0), (580, -20, 100)]
     );
 }
+
+#[test]
+fn bulk_passes_need_the_whole_budget() {
+    // The smallest budget is 2^20 steps.
+    let limits = Limits::new(0);
+    assert!(limits.spend((1 << 20) - 1));
+    assert!(!limits.exhausted());
+    // One step is left: a pass of two may not start, and the budget is spent.
+    assert!(!limits.spend(2));
+    assert!(limits.exhausted());
+    assert!(!limits.spend(0));
+}

@@ -305,11 +305,12 @@ pub fn itemize(text: &str, fonts: &[&Font]) -> Vec<Run> {
             .get(script_run)
             .filter(|(r, _)| r.contains(&range.start))
             .map_or(Script::COMMON, |&(_, s)| s);
-        // Coverage counts what `shape` maps for this script: Hangul jamo compose there.
-        let hangul = script.opentype_tag() == Some(*b"hang");
+        // Coverage counts what `shape` maps for this script: Hangul jamo compose there, and
+        // Hebrew points into presentation forms.
+        let tag = script.opentype_tag();
         let font = previous
-            .filter(|&f| neutral && covers(fonts[f], grapheme, hangul))
-            .or_else(|| fonts.iter().position(|f| covers(f, grapheme, hangul)))
+            .filter(|&f| neutral && covers(fonts[f], grapheme, tag))
+            .or_else(|| fonts.iter().position(|f| covers(f, grapheme, tag)))
             .or_else(|| {
                 let base = grapheme.chars().next()?;
                 fonts.iter().position(|f| f.glyph_index(base).is_some())
@@ -352,11 +353,17 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
 }
 
 /// Whether `font` can draw every character of `grapheme` that needs a glyph, one by one
-/// or as shaping maps them, composing a letter and its marks (or Hangul jamo, for Hangul
-/// text) into a glyph the font has.
-fn covers(font: &Font, grapheme: &str, hangul: bool) -> bool {
+/// or as shaping maps them in left-to-right text of the script tagged `script`, composing
+/// a letter and its marks (Hangul jamo, for Hangul; points into presentation forms, for
+/// Hebrew) into a glyph the font has.
+fn covers(font: &Font, grapheme: &str, script: Option<[u8; 4]>) -> bool {
     let mapped = || {
-        normalize(font, grapheme, Shaper::of(hangul), false, false)
+        let shaper = match script {
+            Some(tag) if tag == *b"hang" => Shaper::Hangul,
+            Some(tag) if tag == *b"hebr" => super::hebrew_shaper(font),
+            _ => Shaper::Default,
+        };
+        normalize(font, grapheme, shaper, false, false)
             .iter()
             .all(|ch| ch.glyph != 0 || char_info(ch.c) & DEFAULT_IGNORABLE != 0)
     };
