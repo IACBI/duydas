@@ -1440,7 +1440,9 @@ impl<'a> Apply<'a, '_> {
         digests: Option<&[Digest]>,
     ) -> Option<usize> {
         let info = *self.info.get(i)?;
-        if self.skips(&info, lookup.flags, lookup.filter) {
+        // A glyph a context record picks takes the nested lookup whatever its flags skip, as
+        // in HarfBuzz; the flags still apply to the glyphs matched after it.
+        if depth == 0 && self.skips(&info, lookup.flags, lookup.filter) {
             return None;
         }
         let t = self.t;

@@ -379,7 +379,8 @@ fn grapheme_joiners_are_not_marks_without_gdef() {
 }
 
 /// A font covers a letter and its marks when shaping composes them into a glyph it has, so
-/// fallback picks the font that draws é over one with only e.
+/// fallback picks the font that draws é over one with only e, and the font with 가 over
+/// one with only its first jamo.
 #[test]
 fn fallback_counts_composed_glyphs() {
     let font = |map: &[(u32, u32, u32)]| {
@@ -393,6 +394,14 @@ fn fallback_counts_composed_glyphs() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].font, 1);
     assert_eq!(ids(&run(&precomposed, "e\u{301}", &latin())), [2]);
+
+    // Hangul jamo count as covered by a font with the syllable they compose into.
+    let only_l = font(&[(0x1100, 0x1100, 1)]);
+    let syllable = font(&[(0xAC00, 0xAC00, 1)]);
+    let runs = itemize("\u{1100}\u{1161}", &[&only_l, &syllable]);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].font, 1);
+    assert_eq!(runs[0].script.opentype_tag(), Some(*b"hang"));
 }
 
 /// A font without GPOS whose acute has a single-point contour above its ink: the box its

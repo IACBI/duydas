@@ -275,16 +275,6 @@ pub fn itemize(text: &str, fonts: &[&Font]) -> Vec<Run> {
         let range = start..start + grapheme.len();
         start = range.end;
         let neutral = grapheme.chars().all(|c| !Script::of(c).is_specific());
-        let font = previous
-            .filter(|&f| neutral && covers(fonts[f], grapheme))
-            .or_else(|| fonts.iter().position(|f| covers(f, grapheme)))
-            .or_else(|| {
-                let base = grapheme.chars().next()?;
-                fonts.iter().position(|f| f.glyph_index(base).is_some())
-            })
-            .or(previous)
-            .unwrap_or(0);
-        previous = Some(font);
         while scripts
             .get(script_run)
             .is_some_and(|(r, _)| r.end <= range.start)
@@ -295,6 +285,18 @@ pub fn itemize(text: &str, fonts: &[&Font]) -> Vec<Run> {
             .get(script_run)
             .filter(|(r, _)| r.contains(&range.start))
             .map_or(Script::COMMON, |&(_, s)| s);
+        // Coverage counts what `shape` maps for this script: Hangul jamo compose there.
+        let hangul = script.opentype_tag() == Some(*b"hang");
+        let font = previous
+            .filter(|&f| neutral && covers(fonts[f], grapheme, hangul))
+            .or_else(|| fonts.iter().position(|f| covers(f, grapheme, hangul)))
+            .or_else(|| {
+                let base = grapheme.chars().next()?;
+                fonts.iter().position(|f| f.glyph_index(base).is_some())
+            })
+            .or(previous)
+            .unwrap_or(0);
+        previous = Some(font);
         match runs.last_mut() {
             Some(run) if run.font == font && run.script == script => run.range.end = range.end,
             _ => runs.push(Run {
@@ -330,10 +332,11 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
 }
 
 /// Whether `font` can draw every character of `grapheme` that needs a glyph, one by one
-/// or as shaping maps them, composing a letter and its marks into a glyph the font has.
-fn covers(font: &Font, grapheme: &str) -> bool {
+/// or as shaping maps them, composing a letter and its marks (or Hangul jamo, for Hangul
+/// text) into a glyph the font has.
+fn covers(font: &Font, grapheme: &str, hangul: bool) -> bool {
     covers_each(font, grapheme)
-        || normalize(font, grapheme, false)
+        || normalize(font, grapheme, hangul)
             .iter()
             .all(|ch| ch.glyph != 0 || char_info(ch.c) & DEFAULT_IGNORABLE != 0)
 }

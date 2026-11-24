@@ -1009,6 +1009,38 @@ fn nested_edits_far_apart_spend_the_glyphs_they_move() {
 }
 
 #[test]
+fn nested_lookups_apply_to_the_glyph_their_record_picks() {
+    // A context picks a base before 2, and a mark before 2, and calls lookups that skip
+    // bases and marks; HarfBuzz 10.4.0 applies both anyway. A ligature that skips marks
+    // still reaches over the mark after the glyph it was called on.
+    let gdef_table = gdef(
+        &[(1, 1), (2, 1), (3, 1), (4, 1), (5, 3), (6, 3), (7, 1)],
+        &[],
+        &[],
+    );
+    let table = simple_table(
+        &[TEST],
+        vec![
+            lookup(
+                6,
+                0,
+                vec![
+                    chain(&[], &[&[1]], &[&[2]], &[(0, 1)]),
+                    chain(&[], &[&[5]], &[&[2]], &[(0, 2)]),
+                    chain(&[], &[&[3]], &[&[5]], &[(0, 3)]),
+                ],
+            ),
+            lookup(1, IGNORE_BASE_GLYPHS, vec![single(&[(1, 7)])]),
+            lookup(1, IGNORE_MARKS, vec![single(&[(5, 6)])]),
+            lookup(4, IGNORE_MARKS, vec![ligatures(&[(&[3, 4], 7)])]),
+        ],
+    );
+    assert_eq!(glyphs(&gsub(&table, &gdef_table, &[1, 2])), [7, 2]);
+    assert_eq!(glyphs(&gsub(&table, &gdef_table, &[5, 2])), [6, 2]);
+    assert_eq!(glyphs(&gsub(&table, &gdef_table, &[3, 5, 4])), [7, 5]);
+}
+
+#[test]
 fn hostile_lookups_stop() {
     // A context that calls itself and grows the buffer each time.
     let table = simple_table(
