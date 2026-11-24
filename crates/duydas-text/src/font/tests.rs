@@ -112,7 +112,7 @@ fn hmtx(advances: &[u16], glyphs: usize) -> Vec<u8> {
     out
 }
 
-fn cmap_table(subtables: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+pub(crate) fn cmap_table(subtables: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
     let mut out = u16s(&[0, subtables.len() as u16]);
     let mut offset = 4 + 8 * subtables.len();
     for (platform, encoding, data) in subtables {
@@ -172,7 +172,7 @@ fn format4(segments: &[Segment]) -> Vec<u8> {
     out
 }
 
-fn format12(groups: &[(u32, u32, u32)]) -> Vec<u8> {
+pub(crate) fn format12(groups: &[(u32, u32, u32)]) -> Vec<u8> {
     let mut out = u16s(&[12, 0]);
     out.extend(u32s(&[
         (16 + 12 * groups.len()) as u32,
@@ -191,7 +191,7 @@ fn u24(v: u32) -> [u8; 3] {
 }
 
 /// Format 14 with one selector: default ranges and glyph mappings.
-fn format14(selector: u32, defaults: &[(u32, u8)], mappings: &[(u32, u16)]) -> Vec<u8> {
+pub(crate) fn format14(selector: u32, defaults: &[(u32, u8)], mappings: &[(u32, u16)]) -> Vec<u8> {
     let default_at = 10 + 11;
     let default_len = 4 + 4 * defaults.len();
     let mapping_at = default_at + default_len;
@@ -214,7 +214,7 @@ fn format14(selector: u32, defaults: &[(u32, u8)], mappings: &[(u32, u16)]) -> V
 }
 
 /// A simple glyph, encoded with short, repeated and same-as-before coordinates where possible.
-fn simple_glyph(contours: &[&[(i16, i16, bool)]]) -> Vec<u8> {
+pub(crate) fn simple_glyph(contours: &[&[(i16, i16, bool)]]) -> Vec<u8> {
     let points: Vec<(i16, i16, bool)> = contours.iter().flat_map(|c| c.iter().copied()).collect();
     let x_min = points.iter().map(|p| p.0).min().unwrap_or(0);
     let x_max = points.iter().map(|p| p.0).max().unwrap_or(0);
@@ -470,7 +470,11 @@ fn glyf_font() -> Vec<u8> {
 
 /// A TrueType font with these glyphs and (advance, left side bearing) metrics, 1,000 units
 /// per em; `extra` tables replace the defaults.
-fn tt_font(glyphs: &[Vec<u8>], metrics: &[(u16, i16)], extra: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+pub(crate) fn tt_font(
+    glyphs: &[Vec<u8>],
+    metrics: &[(u16, i16)],
+    extra: &[(&[u8; 4], Vec<u8>)],
+) -> Vec<u8> {
     let (glyf, loca) = glyf_loca(glyphs, false);
     let mut hmtx: Vec<u8> = metrics
         .iter()
@@ -2119,7 +2123,7 @@ fn corrupted_fonts_fail_cleanly() {
 // ---- Installed fonts ----
 
 /// Font directories of the operating system, plus any in `DUYDAS_FONT_DIRS`.
-fn font_dirs() -> Vec<PathBuf> {
+pub(crate) fn font_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("DUYDAS_FONT_DIRS")
         .map(|v| std::env::split_paths(&v).collect())
         .unwrap_or_default();
@@ -2138,7 +2142,7 @@ fn font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+pub(crate) fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

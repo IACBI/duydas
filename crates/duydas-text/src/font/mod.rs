@@ -11,11 +11,12 @@
 mod cff;
 mod cmap;
 mod glyf;
+pub(crate) mod layout;
 mod outline;
 mod raster;
 mod reader;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::fmt;
 use std::sync::Arc;
@@ -130,6 +131,12 @@ pub struct Font {
     outlines: Outlines,
     name: Option<Span>,
     variable: bool,
+    gdef: Option<Span>,
+    gsub: Option<Span>,
+    gpos: Option<Span>,
+    kern: Option<Span>,
+    /// Shared by clones, so what one shaping works out serves the next.
+    layout_cache: Arc<layout::Cache>,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +171,10 @@ struct Tables {
     post: Option<Span>,
     name: Option<Span>,
     fvar: Option<Span>,
+    gdef: Option<Span>,
+    gsub: Option<Span>,
+    gpos: Option<Span>,
+    kern: Option<Span>,
     bitmaps: bool,
 }
 
@@ -196,6 +207,10 @@ impl Tables {
                 b"post" => &mut t.post,
                 b"name" => &mut t.name,
                 b"fvar" => &mut t.fvar,
+                b"GDEF" => &mut t.gdef,
+                b"GSUB" => &mut t.gsub,
+                b"GPOS" => &mut t.gpos,
+                b"kern" => &mut t.kern,
                 // Apple's bitmap-only fonts have `bhed` in place of `head`.
                 b"CBDT" | b"EBDT" | b"sbix" | b"bdat" | b"bhed" => {
                     t.bitmaps = true;
@@ -348,6 +363,11 @@ impl Font {
             outlines,
             name: t.name,
             variable: t.fvar.is_some(),
+            gdef: t.gdef,
+            gsub: t.gsub,
+            gpos: t.gpos,
+            kern: t.kern,
+            layout_cache: Arc::default(),
             data,
         })
     }
@@ -465,6 +485,20 @@ impl Font {
         }
     }
 
+    /// The font's layout tables; a GSUB or GPOS table of an unknown major version counts as
+    /// absent.
+    pub(crate) fn layout_tables(&self) -> layout::Tables<'_> {
+        let table = |span: Option<Span>| span.map(|s| s.of(&self.data));
+        let known = |t: &&[u8]| u16_at(t, 0) == Some(1);
+        layout::Tables {
+            gdef: table(self.gdef).map(layout::Gdef::new).unwrap_or_default(),
+            gsub: table(self.gsub).filter(known),
+            gpos: table(self.gpos).filter(known),
+            kern: table(self.kern),
+            cache: Some(&self.layout_cache),
+        }
+    }
+
     /// How far the pen moves after the glyph, in font units.
     pub fn advance(&self, glyph: GlyphId) -> Option<u16> {
         if glyph.0 >= self.num_glyphs {
@@ -487,6 +521,30 @@ impl Font {
         } else {
             i16_at(hmtx, 4 * n + 2 * (g - n))
         }
+    }
+
+    /// A TrueType glyph's extents as HarfBuzz reads them at the default instance: the box its
+    /// header records, placed by its left side bearing, as the left edge, the top, the width
+    /// and the height (down, so negative). Single-point contours count, though they draw
+    /// nothing. A glyph without an outline has zero extents. `None` for a CFF glyph, whose
+    /// box comes from its outline.
+    pub(crate) fn header_extents(&self, glyph: GlyphId) -> Result<Option<[i32; 4]>, FontError> {
+        let Outlines::Glyf(glyf) = &self.outlines else {
+            return Ok(None);
+        };
+        let bytes = glyf.bytes(&self.data, glyph.0)?;
+        // HarfBuzz reads a glyph too short for its header as empty.
+        let Some([x0, y0, x1, y1]) = [2, 4, 6, 8]
+            .into_iter()
+            .map(|k| i16_at(bytes, k).map(i32::from))
+            .collect::<Option<Vec<i32>>>()
+            .and_then(|v| <[i32; 4]>::try_from(v).ok())
+        else {
+            return Ok(Some([0; 4]));
+        };
+        let left = self.left_side_bearing(glyph).map_or(x0.min(x1), i32::from);
+        let top = y0.max(y1);
+        Ok(Some([left, top, (x1 - x0).abs(), y0.min(y1) - top]))
     }
 
     /// Sends the glyph's outline to `sink`, in font units with y up. On error the sink may
