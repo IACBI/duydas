@@ -31,7 +31,7 @@ Hand-written crypto would need an independent audit before anyone could trust it
 | 1 | Localization, permissions, system language | fluent-bundle, fluent-syntax, fluent-langneg, unic-langid, ICU4X, sys-locale, bitflags | **Done** (ADR 0022) |
 | 2 | Platform layer: windows, input, clipboard, IME. Win32 first, then Wayland/X11 and Cocoa | winit (via Iced) | **Win32 done** (ADR 0023); Wayland/X11 and Cocoa next |
 | 3 | Renderer: CPU rasterizer with damage tracking and scroll blitting; a GPU path only if measurements require it | wgpu, tiny-skia | **Done** (ADR 0024); no GPU path needed |
-| 4 | Text: OpenType parsing, glyph rasterization, font fallback, UAX #14 line breaking (Japanese line-breaking rules included) | cosmic-text | **Segmentation done** (ADR 0025), **font parsing and rasterization done** (ADR 0026); shaping, fallback and layout next |
+| 4 | Text: OpenType parsing, glyph rasterization, font fallback, UAX #14 line breaking (Japanese line-breaking rules included) | cosmic-text | **Segmentation done** (ADR 0025), **font parsing and rasterization done** (ADR 0026), **shaping and font fallback done** (ADR 0027); layout and the glyph cache next |
 | 5 | Widgets, layout and the Elm-style update loop; port of the virtual list (ADR 0018) | iced | |
 | 6 | Accessibility: UI Automation, NSAccessibility, AT-SPI | (missing in Iced) | |
 | 7 | Audio I/O (WASAPI, CoreAudio, ALSA/PipeWire), echo cancellation, noise suppression, jitter buffer, RTP/RTCP, ICE/STUN | cpal and the str0m media stack (ADR 0006) | |

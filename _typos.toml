@@ -8,10 +8,17 @@ extend-exclude = [
     "crates/duydas-render/examples/scroll/corpus.rs",
     # Generated from the Unicode Character Database: code points and property values.
     "crates/duydas-text/src/tables.rs",
+    "crates/duydas-text/src/shaping_tables.rs",
     "crates/duydas-text/tests/data/",
 ]
 
+[default]
+# Four-byte OpenType tags (b"vai ", b"GAE "): script and language codes, not words.
+extend-ignore-re = ['b"[A-Za-z0-9 ]{4}"']
+
 [default.extend-words]
+# The OpenType tracking table.
+trak = "trak"
 # Turkish words in the README's Türkçe section that resemble English typos.
 sistem = "sistem"
 # Win32 SDK names (TME_LEAVE, a TrackMouseEvent flag).

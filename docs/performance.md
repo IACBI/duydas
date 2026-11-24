@@ -124,4 +124,16 @@ This covers segmentation only; shaping and layout come later. Details: [ADR 0025
 | Yu Gothic Medium (TrueType, collection) | 24,411 | 25–39 ns | 8.3–8.4 µs | 9.1–9.5 µs | 10.4–11.4 µs | 15.4–16.3 µs |
 | Minion Pro (CFF) | 1,686 | 14–15 ns | 3.5–3.6 µs | 3.9–4.1 µs | 4.7–4.8 µs | 7.2–8.5 µs |
 
-Parsing a face takes 1–13 µs. Once glyphs are cached (the cache is still to come), a screen with 2,000 distinct glyphs at 12–16 px would cost an estimated 7–19 ms the first time it appears. Shaping and layout come later. Details: [ADR 0026](adr/0026-font-parsing-and-rasterization.md).
+Parsing a face takes 1–13 µs. Once glyphs are cached (the cache is still to come), a screen with 2,000 distinct glyphs at 12–16 px would cost an estimated 7–19 ms the first time it appears. Details: [ADR 0026](adr/0026-font-parsing-and-rasterization.md).
+
+## Baseline: shaping and font fallback (2026-11-24)
+
+`cargo run --release -p duydas-text --example shape_bench` shapes Turkish, Japanese and English chat messages of 41–90 characters as one run each, and itemizes a mixed message over a list of three fonts. Same machine as above, ranges over five runs:
+
+| Font | Per character | One-character run |
+|---|---|---|
+| Segoe UI (TrueType) | 233–548 ns | 1.2–2.2 µs |
+| Yu Gothic Medium (TrueType, collection) | 220–508 ns | 1.2–2.3 µs |
+| Minion Pro (CFF) | 202–442 ns | 1.1–1.7 µs |
+
+The mixed message, 284 characters in 14 runs, is itemized in 16–27 µs and itemized and shaped in 87–140 µs. From these numbers, shaping a screen of 50 messages of 100 characters would take an estimated 2.5 ms the first time; layout, which will cache shaped runs, comes next. Details: [ADR 0027](adr/0027-text-shaping-and-font-fallback.md).

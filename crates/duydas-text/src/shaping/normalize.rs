@@ -1,0 +1,442 @@
+//! Mapping characters to glyphs, with canonical decomposition and composition chosen by
+//! what the font covers, as HarfBuzz does: a character the font lacks is decomposed when the
+//! font has its parts, marks are put in canonical order, and a base and mark the font has a
+//! precomposed glyph for are composed again.
+
+use crate::font::Font;
+use crate::font::layout::{LJMO, TJMO, VJMO};
+use crate::shaping_tables::{COMPOSITIONS, DECOMPOSITIONS, MARK, char_info};
+
+/// A character and the glyph it maps to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Char {
+    pub(super) c: char,
+    pub(super) glyph: u16,
+    /// Byte offset of the start of the character's grapheme cluster.
+    pub(super) cluster: usize,
+    /// How to size a space drawn with the font's U+0020 glyph; see [`space_kind`].
+    pub(super) space: u8,
+    /// A variation selector whose sequence the font lacks: from here on it is a format
+    /// character, not a mark, as in HarfBuzz.
+    pub(super) unmatched_selector: bool,
+    /// The Hangul jamo feature for this character alone (see [`preprocess_hangul`]).
+    pub(super) jamo: u8,
+}
+
+/// More combining marks in a row than this are left in their order, as in HarfBuzz.
+const MAX_COMBINING_MARKS: usize = 32;
+
+pub(super) fn combining_class(c: char) -> u8 {
+    ((char_info(c) >> 8) & 0xFF) as u8
+}
+
+pub(super) fn is_variation_selector(c: char) -> bool {
+    matches!(c, '\u{180B}'..='\u{180D}' | '\u{180F}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// A space with no glyph of its own is drawn with U+0020's glyph at the width it should
+/// have, as HarfBuzz does: 1 to 6 and 16 are fractions of the em, 18 is 4/18 em, and the
+/// others are named below. [`SPACE`] keeps the space glyph's own width.
+pub(super) const SPACE: u8 = 20;
+pub(super) const SPACE_FIGURE: u8 = 7;
+pub(super) const SPACE_PUNCTUATION: u8 = 8;
+pub(super) const SPACE_NARROW: u8 = 9;
+pub(super) const SPACE_4_EM_18: u8 = 18;
+
+pub(super) fn space_kind(c: char) -> u8 {
+    match c {
+        '\u{0020}' | '\u{00A0}' => SPACE,
+        '\u{2001}' | '\u{2003}' | '\u{3000}' => 1,
+        '\u{2000}' | '\u{2002}' => 2,
+        '\u{2004}' => 3,
+        '\u{2005}' => 4,
+        '\u{2009}' => 5,
+        '\u{2006}' => 6,
+        '\u{200A}' => 16,
+        '\u{2007}' => SPACE_FIGURE,
+        '\u{2008}' => SPACE_PUNCTUATION,
+        '\u{202F}' => SPACE_NARROW,
+        '\u{205F}' => SPACE_4_EM_18,
+        _ => 0,
+    }
+}
+
+/// The canonical decomposition of `c` into one or two characters; Hangul syllables
+/// decompose algorithmically.
+pub(super) fn decomposition(c: char) -> Option<(char, Option<char>)> {
+    let s = u32::from(c);
+    if let Some(index) = s.checked_sub(S_BASE).filter(|&i| i < S_COUNT) {
+        let t = index % T_COUNT;
+        return if t == 0 {
+            let l = char::from_u32(L_BASE + index / N_COUNT)?;
+            Some((l, char::from_u32(V_BASE + index % N_COUNT / T_COUNT)))
+        } else {
+            Some((char::from_u32(s - t)?, char::from_u32(T_BASE + t)))
+        };
+    }
+    let i = DECOMPOSITIONS
+        .binary_search_by_key(&s, |&(cp, _, _)| cp)
+        .ok()?;
+    let (_, a, b) = DECOMPOSITIONS[i];
+    Some((
+        char::from_u32(a)?,
+        (b != 0).then(|| char::from_u32(b)).flatten(),
+    ))
+}
+
+/// The primary composite of `a` and `b`.
+pub(super) fn composition(a: char, b: char) -> Option<char> {
+    let key = (u32::from(a), u32::from(b));
+    let i = COMPOSITIONS
+        .binary_search_by(|&(x, y, _)| (x, y).cmp(&key))
+        .ok()?;
+    char::from_u32(COMPOSITIONS[i].2)
+}
+
+/// Maps `text` to characters and glyphs. Each character's cluster is the start of its
+/// grapheme cluster.
+///
+/// Hangul text (`hangul`) is handled as HarfBuzz's Hangul shaper does (see
+/// [`preprocess_hangul`]): jamo compose into a syllable the font has, even when the font
+/// has the jamo too. Other characters the font has are not decomposed or composed.
+pub(super) fn normalize(font: &Font, text: &str, hangul: bool) -> Vec<Char> {
+    let mut chars: Vec<(char, usize, u8)> = Vec::with_capacity(text.len());
+    let mut start = 0;
+    for grapheme in crate::graphemes(text) {
+        chars.extend(grapheme.chars().map(|c| (c, start, 0)));
+        start += grapheme.len();
+    }
+    if hangul {
+        chars = preprocess_hangul(font, &chars);
+    }
+    let mut out = Vec::with_capacity(chars.len());
+    let mut rest = &chars[..];
+    while let Some(&(_, cluster, _)) = rest.first() {
+        let len = rest.iter().take_while(|&&(_, c, _)| c == cluster).count();
+        let (group, tail) = rest.split_at(len);
+        rest = tail;
+        let mut mapper = Mapper {
+            font,
+            cluster,
+            jamo: 0,
+            out: &mut out,
+        };
+        if group.iter().any(|&(c, _, _)| is_variation_selector(c)) {
+            mapper.selector_cluster(group);
+            continue;
+        }
+        // A cluster with marks is decomposed as far as the font allows, so its marks can be
+        // reordered and composed again; others keep the characters the font has.
+        let shortest = hangul
+            || !group
+                .iter()
+                .any(|&(c, _, _)| char_info(c) & MARK != 0 || combining_class(c) != 0);
+        for &(c, _, jamo) in group {
+            mapper.jamo = jamo;
+            mapper.current(c, shortest);
+        }
+    }
+    reorder(&mut out);
+    if !hangul {
+        recompose(font, &mut out);
+    }
+    out
+}
+
+const L_BASE: u32 = 0x1100;
+const V_BASE: u32 = 0x1161;
+const T_BASE: u32 = 0x11A7;
+const S_BASE: u32 = 0xAC00;
+const T_COUNT: u32 = 28;
+const N_COUNT: u32 = 21 * T_COUNT;
+const S_COUNT: u32 = 19 * N_COUNT;
+
+fn is_l(u: u32) -> bool {
+    (0x1100..=0x115F).contains(&u) || (0xA960..=0xA97C).contains(&u)
+}
+
+fn is_v(u: u32) -> bool {
+    (0x1160..=0x11A7).contains(&u) || (0xD7B0..=0xD7C6).contains(&u)
+}
+
+fn is_t(u: u32) -> bool {
+    (0x11A8..=0x11FF).contains(&u) || (0xD7CB..=0xD7FB).contains(&u)
+}
+
+/// A trailing jamo that composes with an LV syllable.
+fn is_combining_t(u: u32) -> bool {
+    (T_BASE + 1..T_BASE + T_COUNT).contains(&u)
+}
+
+/// Prepares Hangul text as HarfBuzz's Hangul shaper does. A syllable, <L, V>, <L, V, T>,
+/// <LV>, <LVT> or <LV, T>, is composed when the font has the whole of it, and otherwise
+/// decomposed into jamo the font has, which then take the `ljmo`, `vjmo` and `tjmo`
+/// features. A tone mark after a syllable moves in front of it, unless its glyph has no
+/// width; one with no syllable before it gets a dotted circle, when the font has one.
+fn preprocess_hangul(font: &Font, chars: &[(char, usize, u8)]) -> Vec<(char, usize, u8)> {
+    let has = |u: u32| char::from_u32(u).filter(|&c| font.glyph_index(c).is_some());
+    let code = |i: usize| chars.get(i).map(|&(c, _, _)| u32::from(c));
+    let jamo = [LJMO, VJMO, TJMO];
+    let mut out: Vec<(char, usize, u8)> = Vec::with_capacity(chars.len());
+    // The last syllable put out, `out[start..end]`, when `start < end`.
+    let (mut start, mut end) = (0, 0);
+    let mut i = 0;
+    while i < chars.len() {
+        let (c, cluster, _) = chars[i];
+        let u = u32::from(c);
+        if (0x302E..=0x302F).contains(&u) {
+            let zero_width = font
+                .glyph_index(c)
+                .is_some_and(|g| font.advance(g) == Some(0));
+            if start < end && end == out.len() {
+                if zero_width {
+                    out.push((c, cluster, 0));
+                } else {
+                    out.insert(start, (c, cluster, 0));
+                }
+            } else if let Some(circle) = has(0x25CC) {
+                let pair = if zero_width { [circle, c] } else { [c, circle] };
+                out.extend(pair.map(|c| (c, cluster, 0)));
+            } else {
+                out.push((c, cluster, 0));
+            }
+            i += 1;
+            (start, end) = (out.len(), out.len());
+            continue;
+        }
+        start = out.len();
+        if is_l(u) {
+            if let Some(v) = code(i + 1).filter(|&v| is_v(v)) {
+                let t = code(i + 2).filter(|&t| is_t(t));
+                let len = if t.is_some() { 3 } else { 2 };
+                if (L_BASE..L_BASE + 19).contains(&u)
+                    && (V_BASE..V_BASE + 21).contains(&v)
+                    && t.is_none_or(is_combining_t)
+                    && let Some(s) = has(S_BASE
+                        + (u - L_BASE) * N_COUNT
+                        + (v - V_BASE) * T_COUNT
+                        + t.map_or(0, |t| t - T_BASE))
+                {
+                    out.push((s, cluster, 0));
+                    end = start + 1;
+                } else {
+                    for k in 0..len {
+                        let (c, cluster, _) = chars[i + k];
+                        out.push((c, cluster, jamo[k]));
+                    }
+                    end = start + len;
+                }
+                i += len;
+                continue;
+            }
+        } else if (S_BASE..S_BASE + S_COUNT).contains(&u) {
+            let has_glyph = font.glyph_index(c).is_some();
+            let (lv, t) = ((u - S_BASE) / T_COUNT, (u - S_BASE) % T_COUNT);
+            let next = code(i + 1);
+            if t == 0
+                && let Some(s) = next
+                    .filter(|&n| is_combining_t(n))
+                    .and_then(|n| has(u + n - T_BASE))
+            {
+                out.push((s, cluster, 0));
+                end = start + 1;
+                i += 2;
+                continue;
+            }
+            let t_follows = t == 0 && next.is_some_and(is_t);
+            if !has_glyph || t_follows {
+                let parts = [L_BASE + lv / 21, V_BASE + lv % 21, T_BASE + t];
+                let len = if t == 0 { 2 } else { 3 };
+                let found: Option<Vec<char>> = parts[..len].iter().map(|&p| has(p)).collect();
+                if let Some(found) = found {
+                    out.extend(found.iter().zip(jamo).map(|(&c, j)| (c, cluster, j)));
+                    i += 1;
+                    end = start + len;
+                    // An LV decomposed for the trailing jamo after it takes that jamo in.
+                    if has_glyph {
+                        let (c, cluster, _) = chars[i];
+                        out.push((c, cluster, TJMO));
+                        i += 1;
+                        end += 1;
+                    }
+                    continue;
+                }
+            }
+            if has_glyph {
+                end = start + 1;
+            }
+        }
+        out.push((c, cluster, 0));
+        i += 1;
+    }
+    out
+}
+
+struct Mapper<'a> {
+    font: &'a Font,
+    cluster: usize,
+    /// The jamo feature of the character being mapped.
+    jamo: u8,
+    out: &'a mut Vec<Char>,
+}
+
+impl Mapper<'_> {
+    fn glyph(&self, c: char) -> Option<u16> {
+        self.font.glyph_index(c).map(|g| g.0)
+    }
+
+    /// A cluster with a variation selector is not normalized: a base whose variant the font
+    /// lists takes that glyph and drops the selector; otherwise both keep their own glyphs.
+    fn selector_cluster(&mut self, group: &[(char, usize, u8)]) {
+        let nominal = |m: &Self, c: char| m.glyph(c).unwrap_or(0);
+        let mut i = 0;
+        while i < group.len() {
+            let (c, _, jamo) = group[i];
+            self.jamo = jamo;
+            i += 1;
+            let Some(&(selector, _, _)) =
+                group.get(i).filter(|&&(s, _, _)| is_variation_selector(s))
+            else {
+                let glyph = nominal(self, c);
+                self.push(c, glyph, 0);
+                continue;
+            };
+            i += 1;
+            match self.font.glyph_variant(c, selector) {
+                Some(glyph) => self.push(c, glyph.0, 0),
+                None => {
+                    let glyph = nominal(self, c);
+                    self.push(c, glyph, 0);
+                    self.jamo = 0;
+                    let glyph = nominal(self, selector);
+                    self.push(selector, glyph, 0);
+                    if let Some(last) = self.out.last_mut() {
+                        last.unmatched_selector = true;
+                    }
+                }
+            }
+            self.jamo = 0;
+            while let Some(&(more, _, _)) =
+                group.get(i).filter(|&&(s, _, _)| is_variation_selector(s))
+            {
+                let glyph = nominal(self, more);
+                self.push(more, glyph, 0);
+                i += 1;
+            }
+        }
+    }
+
+    fn push(&mut self, c: char, glyph: u16, space: u8) {
+        self.out.push(Char {
+            c,
+            glyph,
+            cluster: self.cluster,
+            space,
+            unmatched_selector: false,
+            jamo: self.jamo,
+        });
+    }
+
+    fn current(&mut self, c: char, shortest: bool) {
+        if shortest && let Some(glyph) = self.glyph(c) {
+            return self.push(c, glyph, 0);
+        }
+        if self.decompose(c, shortest) {
+            return;
+        }
+        if let Some(glyph) = self.glyph(c) {
+            return self.push(c, glyph, 0);
+        }
+        let kind = space_kind(c);
+        if kind != 0
+            && let Some(glyph) = self.glyph(' ')
+        {
+            return self.push(c, glyph, kind);
+        }
+        // The one no-break character that is not a space and has a breaking twin.
+        if c == '\u{2011}'
+            && let Some(glyph) = self.glyph('\u{2010}')
+        {
+            return self.push(c, glyph, 0);
+        }
+        self.push(c, 0, 0);
+    }
+
+    /// Pushes `c`'s decomposition if the font covers it; pushes nothing otherwise.
+    fn decompose(&mut self, c: char, shortest: bool) -> bool {
+        let Some((a, b)) = decomposition(c) else {
+            return false;
+        };
+        let b = match b {
+            Some(b) => match self.glyph(b) {
+                Some(glyph) => Some((b, glyph)),
+                None => return false,
+            },
+            None => None,
+        };
+        let a_glyph = self.glyph(a);
+        let done = if shortest && let Some(glyph) = a_glyph {
+            self.push(a, glyph, 0);
+            true
+        } else if self.decompose(a, shortest) {
+            true
+        } else if let Some(glyph) = a_glyph {
+            self.push(a, glyph, 0);
+            true
+        } else {
+            false
+        };
+        if done && let Some((b, glyph)) = b {
+            self.push(b, glyph, 0);
+        }
+        done
+    }
+}
+
+/// Sorts each run of combining marks by combining class, keeping equal classes in order.
+fn reorder(chars: &mut [Char]) {
+    let mut i = 0;
+    while i < chars.len() {
+        if combining_class(chars[i].c) == 0 {
+            i += 1;
+            continue;
+        }
+        let end = chars[i..]
+            .iter()
+            .position(|ch| combining_class(ch.c) == 0)
+            .map_or(chars.len(), |n| i + n);
+        if end - i <= MAX_COMBINING_MARKS {
+            chars[i..end].sort_by_key(|ch| combining_class(ch.c));
+        }
+        i = end;
+    }
+}
+
+/// Composes marks with their starter where the font has the composite, unless a mark of
+/// the same or a higher class comes between them.
+fn recompose(font: &Font, chars: &mut Vec<Char>) {
+    if chars.len() < 2 {
+        return;
+    }
+    let mut out: Vec<Char> = Vec::with_capacity(chars.len());
+    let mut starter = 0;
+    for &ch in chars.iter() {
+        if let Some(last) = out.last()
+            && char_info(ch.c) & MARK != 0
+            && (starter == out.len() - 1 || combining_class(last.c) < combining_class(ch.c))
+            && let Some(composed) = composition(out[starter].c, ch.c)
+            && let Some(glyph) = font.glyph_index(composed)
+        {
+            let base = &mut out[starter];
+            base.c = composed;
+            base.glyph = glyph.0;
+            base.space = 0;
+            continue;
+        }
+        out.push(ch);
+        if out.len() == 1 || combining_class(ch.c) == 0 {
+            starter = out.len() - 1;
+        }
+    }
+    *chars = out;
+}

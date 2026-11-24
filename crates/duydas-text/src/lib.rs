@@ -12,11 +12,17 @@
 //! conformance tests.
 //!
 //! Fonts (ADR 0026): [`font`] parses OpenType fonts and rasterizes their glyphs.
+//!
+//! Shaping (ADR 0027): [`shaping`] turns text into positioned glyphs with a font's OpenType
+//! layout tables, and picks a font from a fallback list for each grapheme cluster.
 
 pub mod font;
 mod grapheme;
 mod line;
 mod props;
+pub mod shaping;
+#[rustfmt::skip]
+mod shaping_tables;
 #[rustfmt::skip]
 mod tables;
 #[cfg(test)]
