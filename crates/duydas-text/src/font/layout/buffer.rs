@@ -13,6 +13,8 @@ pub(crate) struct Buffer {
     slots: Vec<GlyphInfo>,
     gap: usize,
     gap_len: usize,
+    /// Glyphs moved to make room since [`Buffer::take_moved`] last ran.
+    moved: usize,
 }
 
 impl Buffer {
@@ -21,6 +23,7 @@ impl Buffer {
             gap: glyphs.len(),
             slots: glyphs,
             gap_len: 0,
+            moved: 0,
         }
     }
 
@@ -45,12 +48,20 @@ impl Buffer {
             .chain(&self.slots[self.gap + self.gap_len..])
     }
 
+    /// The glyphs edits have moved since the last call. Edits that go back and forth, as a
+    /// context's nested lookups can, move the glyphs between them each time, so lookups
+    /// spend that work.
+    pub(crate) fn take_moved(&mut self) -> usize {
+        std::mem::take(&mut self.moved)
+    }
+
     fn slot(&self, i: usize) -> usize {
         if i < self.gap { i } else { i + self.gap_len }
     }
 
     /// Moves the gap to just before glyph `to` (`to` at most the length).
     fn move_gap(&mut self, to: usize) {
+        self.moved += to.abs_diff(self.gap);
         if to < self.gap {
             self.slots.copy_within(to..self.gap, to + self.gap_len);
         } else if to > self.gap {

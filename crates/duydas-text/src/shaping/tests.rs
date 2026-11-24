@@ -308,6 +308,18 @@ fn parity_font_data() -> Vec<u8> {
 /// canonical ordering would swap, it keeps them apart, so an IgnoreMarks ligature cannot
 /// reach over it; between marks of classes 230 and 232, already in order, it does nothing
 /// and is passed over. HarfBuzz 10.4.0 shapes these texts the same way.
+/// A variation selector after a joiner does not keep the letter before the joiner from
+/// being decomposed: HarfBuzz maps a base and its marks as a variation sequence only when
+/// the selector is among those marks. The test font has o and the diaeresis but not ö.
+#[test]
+fn selectors_after_joiners_leave_letters_decomposable() {
+    let font = test_font();
+    let glyphs = ids(&run(&font, "\u{F6}\u{200D}\u{FE0F}", &latin()));
+    assert_eq!(glyphs, [O, DIAERESIS, SPACE_GLYPH, SPACE_GLYPH]);
+    let glyphs = ids(&run(&font, "\u{F6}\u{FE0F}", &latin()));
+    assert_eq!(glyphs, [0, SPACE_GLYPH]);
+}
+
 #[test]
 fn grapheme_joiners_are_not_marks_without_gdef() {
     const LIG: u16 = 7;
@@ -337,6 +349,50 @@ fn grapheme_joiners_are_not_marks_without_gdef() {
     assert_eq!(kept, [2, 5, SPACE_GLYPH, 4, 3]);
     let joined = ids(&run(&font, "a\u{300}\u{34F}\u{315}b", &latin()));
     assert_eq!(joined[0], LIG);
+}
+
+/// A font without GPOS whose acute has a single-point contour above its ink: the box its
+/// header records reaches 300 units higher than what it draws.
+fn extents_font_data() -> Vec<u8> {
+    let cmap = cmap_table(&[(
+        3,
+        10,
+        format12(&[(0x20, 0x20, 1), (0x61, 0x61, 2), (0x301, 0x301, 3)]),
+    )]);
+    let glyphs = vec![
+        Vec::new(),
+        Vec::new(),
+        simple_glyph(&[&[
+            (0, 0, true),
+            (0, 700, true),
+            (500, 700, true),
+            (500, 0, true),
+        ]]),
+        simple_glyph(&[
+            &[
+                (100, 550, true),
+                (100, 700, true),
+                (200, 700, true),
+                (200, 550, true),
+            ],
+            &[(150, 1000, true)],
+        ]),
+    ];
+    let metrics = [(500, 0), (250, 0), (500, 0), (0, 100)];
+    tt_font(&glyphs, &metrics, &[(b"cmap", cmap)])
+}
+
+/// Fallback positioning reads a TrueType glyph's box from its header, as HarfBuzz does, so a
+/// second acute stacks above the first one's single-point contour. HarfBuzz 10.4.0 gives
+/// these positions.
+#[test]
+fn fallback_marks_use_the_header_box() {
+    let font = Font::from_data(extents_font_data(), 0).expect("the font parses");
+    let glyphs = run(&font, "a\u{301}\u{301}", &latin());
+    assert_eq!(
+        positions(&glyphs),
+        [(2, 500, 0, 0), (3, 0, -400, 212), (3, 0, -400, 724)]
+    );
 }
 
 /// The parity font shaped as HarfBuzz 10.4.0 shapes it (glyph, cluster, advance, x and y
@@ -1160,6 +1216,7 @@ fn write_fixtures_for_comparison() {
         ("parity.ttf", parity_font_data()),
         ("masks.ttf", mask_font_data()),
         ("fallback.ttf", fallback_font_data()),
+        ("extents.ttf", extents_font_data()),
     ] {
         std::fs::write(dir.join(name), data).expect("the fixture is written");
     }
@@ -1216,6 +1273,29 @@ fn scripts_and_languages() {
     assert_eq!(tag("zh-Hant-TW"), Some(*b"ZHT "));
     assert_eq!(tag("zh-HK"), Some(*b"ZHH "));
     assert_eq!(tag("zh-CN"), Some(*b"ZHS "));
+    // Chinese as HarfBuzz 10.4.0 tags it (its OpenType tags from script and language): an
+    // explicit script beats the region, and Macao falls back to Hong Kong.
+    let (zhs, zht, zhh) = (Some(*b"ZHS "), Some(*b"ZHT "), Some(*b"ZHH "));
+    for (bcp47, tags) in [
+        ("zh", [zhs, None]),
+        ("zh-SG", [zhs, None]),
+        ("zh-TW", [zht, None]),
+        ("zh_TW", [zht, None]),
+        ("zh-hk", [zhh, None]),
+        ("zh-MO", [Some(*b"ZHTM"), zhh]),
+        ("zh-Hans", [zhs, None]),
+        ("zh-Hant", [zht, None]),
+        ("zh-Hans-TW", [zhs, None]),
+        ("zh-Hans-HK", [zhs, None]),
+        ("zh-Hans-MO", [zhs, None]),
+        ("zh-Hant-HK", [zhh, None]),
+        ("zh-Hant-MO", [Some(*b"ZHTM"), zhh]),
+        ("zh-Hant-CN", [zht, None]),
+        ("zh-Latn-TW", [zht, None]),
+        ("zh-TW-x-hant", [zht, None]),
+    ] {
+        assert_eq!(Language::from_bcp47(bcp47).opentype_tags(), tags, "{bcp47}");
+    }
     assert_eq!(tag("xx"), None);
     assert_eq!(tag(""), None);
 }

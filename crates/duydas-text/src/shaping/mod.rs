@@ -221,7 +221,7 @@ fn shape_with_limits(
     }
 
     let scripts: Vec<[u8; 4]> = options.script.opentype_tag().into_iter().collect();
-    let language = options.language.opentype_tag();
+    let language = options.language.opentype_tags();
     // In HarfBuzz's order: the defaults with the shaper's features, then the caller's; a
     // tag's last setting wins. The Hangul shaper then turns calt off whatever the caller
     // said, as Uniscribe does (some CJK fonts put jamo lookups there).

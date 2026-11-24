@@ -72,7 +72,7 @@ impl Script {
 /// A language, for the font's language-specific forms (OpenType language systems), such as
 /// Turkish dotted i in ligatures or Japanese glyph shapes in a Pan-CJK font.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Language(Option<[u8; 4]>);
+pub struct Language([Option<[u8; 4]>; 2]);
 
 /// BCP 47 primary language subtags (and a few ISO 639-2 codes) with their OpenType language
 /// system tags, sorted by subtag.
@@ -189,31 +189,48 @@ impl Language {
         let mut subtags = tag.split(['-', '_']);
         let primary = subtags.next().unwrap_or("").to_ascii_lowercase();
         if primary == "zh" {
-            let traditional = subtags.any(|s| {
-                ["hant", "tw", "hk", "mo"]
-                    .iter()
-                    .any(|t| s.eq_ignore_ascii_case(t))
-            });
-            let hong_kong = tag
-                .to_ascii_lowercase()
-                .split(['-', '_'])
-                .any(|s| s == "hk" || s == "mo");
-            return Self(Some(match (traditional, hong_kong) {
-                (_, true) => *b"ZHH ",
-                (true, false) => *b"ZHT ",
-                (false, false) => *b"ZHS ",
-            }));
+            return Self::chinese(subtags);
         }
-        Self(
+        Self([
             LANGUAGES
                 .binary_search_by_key(&primary.as_str(), |&(s, _)| s)
                 .ok()
                 .map(|i| LANGUAGES[i].1),
-        )
+            None,
+        ])
+    }
+
+    /// Chinese, as HarfBuzz tags it: an explicit script subtag first (Simplified or
+    /// Traditional), then the region (Taiwan, Hong Kong, Macao), Simplified otherwise. Macao
+    /// falls back to Hong Kong forms when the font has none of its own.
+    fn chinese<'a>(subtags: impl Iterator<Item = &'a str>) -> Self {
+        let (mut script, mut region) = (None, None);
+        for subtag in subtags.take_while(|s| !s.eq_ignore_ascii_case("x")) {
+            let subtag = subtag.to_ascii_lowercase();
+            match subtag.as_str() {
+                "hans" | "hant" if script.is_none() => script = Some(subtag),
+                "tw" | "hk" | "mo" if region.is_none() => region = Some(subtag),
+                _ => {}
+            }
+        }
+        let macao = [Some(*b"ZHTM"), Some(*b"ZHH ")];
+        Self(match (script.as_deref(), region.as_deref()) {
+            (Some("hans"), _) => [Some(*b"ZHS "), None],
+            (_, Some("hk")) => [Some(*b"ZHH "), None],
+            (_, Some("mo")) => macao,
+            (Some("hant"), _) | (_, Some("tw")) => [Some(*b"ZHT "), None],
+            _ => [Some(*b"ZHS "), None],
+        })
     }
 
     /// The OpenType language system tag, if the language has one.
     pub fn opentype_tag(self) -> Option<[u8; 4]> {
+        self.0[0]
+    }
+
+    /// The language system tags to try in order: the tag, then a fallback for the few
+    /// languages HarfBuzz gives one.
+    pub(crate) fn opentype_tags(self) -> [Option<[u8; 4]>; 2] {
         self.0
     }
 }

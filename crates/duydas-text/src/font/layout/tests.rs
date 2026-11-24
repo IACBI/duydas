@@ -973,6 +973,42 @@ fn ligatures_charge_the_marks_they_renumber() {
 }
 
 #[test]
+fn nested_edits_far_apart_spend_the_glyphs_they_move() {
+    // A context matches 1 and 2 over a run of marks. Its records grow and shrink one end,
+    // then the other, again and again, so each pair of edits moves the marks between the
+    // ends twice; a last record marks the near end. The moves pass the budget (4,096 steps
+    // a glyph) halfway through, and the records stop there: the last one never runs.
+    let classes: Vec<(u16, u16)> = vec![(1, 1), (2, 1), (5, 3), (7, 1)];
+    let gdef_table = gdef(&classes, &[], &[]);
+    let (expand, shrink, mark) = (1, 2, 3);
+    let mut records: Vec<(u16, u16)> = (0..2600)
+        .flat_map(|_| [(0, expand), (0, shrink), (1, expand), (1, shrink)])
+        .collect();
+    records.push((0, mark));
+    let table = simple_table(
+        &[TEST],
+        vec![
+            lookup(
+                6,
+                IGNORE_MARKS,
+                vec![chain(&[], &[&[1], &[2]], &[], &records)],
+            ),
+            lookup(2, 0, vec![multiple(&[(1, &[1, 1]), (2, &[2, 2])])]),
+            lookup(4, 0, vec![ligatures(&[(&[1, 1], 1), (&[2, 2], 2)])]),
+            lookup(1, 0, vec![single(&[(1, 7)])]),
+        ],
+    );
+    let marks = 2_000;
+    let mut glyphs = vec![1];
+    glyphs.extend(std::iter::repeat_n(5, marks));
+    glyphs.push(2);
+    let mut info = buffer(&Gdef::new(&gdef_table), &glyphs);
+    let limits = run_gsub(&table, &gdef_table, &mut info);
+    assert!(limits.exhausted());
+    assert_eq!(info[0].glyph, 1, "the records went on past the budget");
+}
+
+#[test]
 fn hostile_lookups_stop() {
     // A context that calls itself and grows the buffer each time.
     let table = simple_table(

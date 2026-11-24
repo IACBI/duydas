@@ -1,6 +1,7 @@
 //! Mark positioning for fonts without GPOS, after HarfBuzz's fallback: each mark with a
 //! combining class goes above, below or beside its base according to that class, using the
-//! glyphs' ink boxes, and marks of the same class stack. The arithmetic wraps at 32 bits, as
+//! glyphs' boxes as HarfBuzz reads them (a TrueType glyph's header box), and marks of the same
+//! class stack. The arithmetic wraps at 32 bits, as
 //! HarfBuzz's does, so hostile metrics cannot overflow it.
 
 use std::collections::HashMap;
@@ -22,7 +23,7 @@ const ABOVE_RIGHT: u8 = 232;
 const DOUBLE_BELOW: u8 = 233;
 const DOUBLE_ABOVE: u8 = 234;
 
-/// A glyph's ink box as HarfBuzz reports it: left and top edges, width, and height down
+/// A glyph's box as HarfBuzz reports it: left and top edges, width, and height down
 /// (negative).
 #[derive(Clone, Copy, Debug, Default)]
 struct Extents {
@@ -32,7 +33,20 @@ struct Extents {
     height: i32,
 }
 
+/// HarfBuzz's extents: a TrueType glyph's header box, or a CFF glyph's outline box.
 fn extents(font: &Font, glyph: u16) -> Option<Extents> {
+    match font.header_extents(GlyphId(glyph)) {
+        Ok(Some([x_bearing, y_bearing, width, height])) => {
+            return Some(Extents {
+                x_bearing,
+                y_bearing,
+                width,
+                height,
+            });
+        }
+        Ok(None) => {}
+        Err(_) => return None,
+    }
     match font.bounds(GlyphId(glyph)) {
         Ok(None) => Some(Extents::default()),
         Ok(Some(b)) => {
@@ -58,8 +72,8 @@ struct Context<'a> {
 }
 
 impl Context<'_> {
-    /// A glyph's ink box, read from its outline the first time; a long run of marks reads
-    /// each distinct glyph once.
+    /// A glyph's box, read the first time it is needed; a long run of marks reads each
+    /// distinct glyph once.
     fn extents(&mut self, glyph: u16) -> Option<Extents> {
         let font = self.font;
         *self

@@ -362,7 +362,7 @@ const PLANS: usize = 16;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Plan {
     scripts: Vec<[u8; 4]>,
-    language: Option<[u8; 4]>,
+    language: Languages,
     requests: Vec<Request>,
     simple: bool,
     pub(crate) gsub: Lookups,
@@ -398,7 +398,7 @@ impl Plan {
 pub(crate) fn plan(
     tables: &Tables<'_>,
     scripts: &[[u8; 4]],
-    language: Option<[u8; 4]>,
+    language: Languages,
     requests: &[Request],
     simple: bool,
 ) -> Arc<Plan> {
@@ -562,12 +562,7 @@ struct LangSys {
 }
 
 impl LangSys {
-    fn new(
-        t: &[u8],
-        scripts: &[[u8; 4]],
-        language: Option<[u8; 4]>,
-        spend: &dyn Fn() -> bool,
-    ) -> Self {
+    fn new(t: &[u8], scripts: &[[u8; 4]], language: Languages, spend: &dyn Fn() -> bool) -> Self {
         let read = || -> Option<Self> {
             let lang_sys = lang_sys(t, scripts, language)?;
             let feature_list = usize::from(u16_at(t, 6)?);
@@ -609,7 +604,7 @@ fn build_plan(
     gsub: Option<&[u8]>,
     gpos: Option<&[u8]>,
     scripts: &[[u8; 4]],
-    language: Option<[u8; 4]>,
+    language: Languages,
     requests: &[Request],
     simple: bool,
 ) -> Plan {
@@ -838,12 +833,16 @@ pub(crate) fn select(
     } else {
         (None, Some(table))
     };
-    build_plan(s, p, scripts, language, &requests, false)
+    build_plan(s, p, scripts, [language, None], &requests, false)
 }
 
-/// The language system for `scripts` (then `DFLT`, `dflt` and `latn`) and `language` (or the
-/// script's default).
-fn lang_sys(t: &[u8], scripts: &[[u8; 4]], language: Option<[u8; 4]>) -> Option<usize> {
+/// OpenType language system tags to try in order, as HarfBuzz gives some languages a
+/// fallback (`ZHTM`, then `ZHH ` for Chinese in Macao).
+pub(crate) type Languages = [Option<[u8; 4]>; 2];
+
+/// The language system for `scripts` (then `DFLT`, `dflt` and `latn`) and the first of
+/// `language` the script has (or the script's default).
+fn lang_sys(t: &[u8], scripts: &[[u8; 4]], language: Languages) -> Option<usize> {
     if u16_at(t, 0)? != 1 {
         return None;
     }
@@ -853,7 +852,9 @@ fn lang_sys(t: &[u8], scripts: &[[u8; 4]], language: Option<[u8; 4]>) -> Option<
         .chain(&[*b"DFLT", *b"dflt", *b"latn"])
         .find_map(|&tag| tagged(t, script_list, script_list, tag))?;
     language
-        .and_then(|tag| tagged(t, script + 2, script, tag))
+        .iter()
+        .flatten()
+        .find_map(|&tag| tagged(t, script + 2, script, tag))
         .or_else(|| match u16_at(t, script)? {
             0 => None,
             offset => Some(script + usize::from(offset)),
@@ -1413,6 +1414,8 @@ impl<'a> Apply<'a, '_> {
                 }
                 let len = self.info.len();
                 let applied = self.apply_at(&lookup, i, 0, Some(&filter.subtables));
+                let moved = self.info.take_moved();
+                self.charge(moved);
                 changed |= applied.is_some();
                 i = match applied {
                     // A deletion leaves the next glyph at `i`.
@@ -1823,7 +1826,10 @@ impl<'a> Apply<'a, '_> {
                 continue;
             };
             let before = self.info.len() as isize;
-            if self.apply_at(&nested, p, depth + 1, None).is_none() {
+            let applied = self.apply_at(&nested, p, depth + 1, None);
+            let moved = self.info.take_moved();
+            self.charge(moved);
+            if applied.is_none() {
                 continue;
             }
             let mut delta = self.info.len() as isize - before;

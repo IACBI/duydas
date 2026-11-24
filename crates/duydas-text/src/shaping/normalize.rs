@@ -121,19 +121,25 @@ pub(super) fn normalize(font: &Font, text: &str, hangul: bool) -> Vec<Char> {
             jamo: 0,
             out: &mut out,
         };
-        if group.iter().any(|&(c, _, _)| is_variation_selector(c)) {
-            mapper.selector_cluster(group);
+        if !group.iter().any(|&(c, _, _)| is_variation_selector(c)) {
+            mapper.cluster(group, hangul);
             continue;
         }
-        // A cluster with marks is decomposed as far as the font allows, so its marks can be
-        // reordered and composed again; others keep the characters the font has.
-        let shortest = hangul
-            || !group
+        // HarfBuzz maps a base and the marks after it as one sequence when a variation
+        // selector is among them; the rest of the grapheme (after a joiner, say) as usual.
+        let mut part = group;
+        while !part.is_empty() {
+            let len = 1 + part[1..]
                 .iter()
-                .any(|&(c, _, _)| char_info(c) & MARK != 0 || combining_class(c) != 0);
-        for &(c, _, jamo) in group {
-            mapper.jamo = jamo;
-            mapper.current(c, shortest);
+                .take_while(|&&(c, _, _)| char_info(c) & MARK != 0)
+                .count();
+            let (marks, rest) = part.split_at(len);
+            part = rest;
+            if marks.iter().any(|&(c, _, _)| is_variation_selector(c)) {
+                mapper.selector_cluster(marks);
+            } else {
+                mapper.cluster(marks, hangul);
+            }
         }
     }
     reorder(&mut out);
@@ -287,6 +293,20 @@ impl Mapper<'_> {
 
     /// A cluster with a variation selector is not normalized: a base whose variant the font
     /// lists takes that glyph and drops the selector; otherwise both keep their own glyphs.
+    /// Maps characters of one grapheme cluster. One with marks is decomposed as far as the
+    /// font allows, so its marks can be reordered and composed again; others keep the
+    /// characters the font has.
+    fn cluster(&mut self, group: &[(char, usize, u8)], hangul: bool) {
+        let shortest = hangul
+            || !group
+                .iter()
+                .any(|&(c, _, _)| char_info(c) & MARK != 0 || combining_class(c) != 0);
+        for &(c, _, jamo) in group {
+            self.jamo = jamo;
+            self.current(c, shortest);
+        }
+    }
+
     fn selector_cluster(&mut self, group: &[(char, usize, u8)]) {
         let nominal = |m: &Self, c: char| m.glyph(c).unwrap_or(0);
         let mut i = 0;
