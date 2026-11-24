@@ -186,10 +186,12 @@ fn shape_with_limits(
                 ignorable: flags & DEFAULT_IGNORABLE != 0,
                 zwnj: ch.c == '\u{200C}',
                 zwj: ch.c == '\u{200D}',
+                // A COMBINING GRAPHEME JOINER that keeps no marks apart can be passed over,
+                // as in HarfBuzz.
                 hidden: matches!(
                     ch.c,
                     '\u{34F}' | '\u{180B}'..='\u{180D}' | '\u{180F}' | '\u{E0020}'..='\u{E007F}'
-                ),
+                ) && !ch.passable_joiner,
                 unicode_mark,
                 combining_class: if unicode_mark {
                     normalize::combining_class(ch.c)
@@ -212,13 +214,6 @@ fn shape_with_limits(
             info
         })
         .collect();
-    // COMBINING GRAPHEME JOINER that keeps no marks apart can be passed over, as in HarfBuzz.
-    for i in 1..info.len().saturating_sub(1) {
-        let (prev, next) = (info[i - 1].combining_class, info[i + 1].combining_class);
-        if chars[i].c == '\u{34F}' && (next == 0 || prev <= next) {
-            info[i].hidden = false;
-        }
-    }
 
     let scripts: Vec<[u8; 4]> = options.script.opentype_tag().into_iter().collect();
     let language = options.language.opentype_tags();

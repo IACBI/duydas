@@ -7,7 +7,7 @@ use crate::shaping_tables::{
     DEFAULT_IGNORABLE, SCRIPT_CODES, SCRIPT_COMMON, SCRIPT_INHERITED, SCRIPT_UNKNOWN, char_info,
 };
 
-use super::normalize::{decomposition, is_variation_selector, space_kind};
+use super::normalize::{decomposition, is_variation_selector, normalize, space_kind};
 
 /// A Unicode script (the Script property, UAX #24).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -250,7 +250,8 @@ pub struct Run {
 ///
 /// Each grapheme cluster gets the first font in `fonts` that covers all its characters
 /// (default-ignorable characters and variation selectors aside; a character also counts as
-/// covered when the font has its canonical decomposition). A cluster of Common or Inherited
+/// covered when the font has its canonical decomposition, and a letter with marks when
+/// shaping composes them into a glyph the font has, such as e and U+0301 into é). A cluster of Common or Inherited
 /// characters, such as a space or a digit, stays with the font before it when that font
 /// covers it. A cluster no font covers goes to the first font that has its first character,
 /// so a letter keeps its font when only a mark after it is missing; failing that, it stays
@@ -328,8 +329,16 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
     runs
 }
 
-/// Whether `font` can draw every character of `grapheme` that needs a glyph.
+/// Whether `font` can draw every character of `grapheme` that needs a glyph, one by one
+/// or as shaping maps them, composing a letter and its marks into a glyph the font has.
 fn covers(font: &Font, grapheme: &str) -> bool {
+    covers_each(font, grapheme)
+        || normalize(font, grapheme, false)
+            .iter()
+            .all(|ch| ch.glyph != 0 || char_info(ch.c) & DEFAULT_IGNORABLE != 0)
+}
+
+fn covers_each(font: &Font, grapheme: &str) -> bool {
     let mut chars = grapheme.chars().peekable();
     while let Some(c) = chars.next() {
         if let Some(&selector) = chars.peek()

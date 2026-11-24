@@ -21,6 +21,10 @@ pub(super) struct Char {
     pub(super) unmatched_selector: bool,
     /// The Hangul jamo feature for this character alone (see [`preprocess_hangul`]).
     pub(super) jamo: u8,
+    /// A COMBINING GRAPHEME JOINER that keeps no marks apart, so lookups may pass over it.
+    /// As in HarfBuzz, this is decided once marks are reordered and before they compose
+    /// again.
+    pub(super) passable_joiner: bool,
 }
 
 /// More combining marks in a row than this are left in their order, as in HarfBuzz.
@@ -143,6 +147,12 @@ pub(super) fn normalize(font: &Font, text: &str, hangul: bool) -> Vec<Char> {
         }
     }
     reorder(&mut out);
+    for i in 1..out.len().saturating_sub(1) {
+        let (prev, next) = (combining_class(out[i - 1].c), combining_class(out[i + 1].c));
+        if out[i].c == '\u{34F}' && (next == 0 || prev <= next) {
+            out[i].passable_joiner = true;
+        }
+    }
     if !hangul {
         recompose(font, &mut out);
     }
@@ -354,6 +364,7 @@ impl Mapper<'_> {
             space,
             unmatched_selector: false,
             jamo: self.jamo,
+            passable_joiner: false,
         });
     }
 

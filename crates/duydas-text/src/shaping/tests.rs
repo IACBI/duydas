@@ -320,35 +320,79 @@ fn selectors_after_joiners_leave_letters_decomposable() {
     assert_eq!(glyphs, [0, SPACE_GLYPH]);
 }
 
-#[test]
-fn grapheme_joiners_are_not_marks_without_gdef() {
-    const LIG: u16 = 7;
+/// A font without GDEF for COMBINING GRAPHEME JOINER: a, b, à, grave (class 230), dot below
+/// (220), U+0315 (232) and CGJ, with IgnoreMarks ligatures `a b` and `à b`.
+fn joiner_font_data() -> Vec<u8> {
     let cmap = cmap_table(&[(
         3,
         10,
         format12(&[
             (0x20, 0x20, 1),
             (0x61, 0x62, 2),
+            (0xE0, 0xE0, 9),
             (0x300, 0x300, 4),
             (0x315, 0x315, 5),
+            (0x323, 0x323, 8),
             (0x34F, 0x34F, 6),
         ]),
     )]);
     let gsub = simple_table(
         &[*b"liga"],
-        vec![lookup(4, 0x8, vec![ligatures(&[(&[2, 3], LIG)])])],
+        vec![lookup(
+            4,
+            0x8,
+            vec![ligatures(&[(&[2, 3], JOINED), (&[9, 3], JOINED_GRAVE)])],
+        )],
     );
-    let metrics = vec![(500u16, 0i16); 8];
-    let data = tt_font(
-        &vec![Vec::new(); 8],
+    let metrics = vec![(500u16, 0i16); 11];
+    tt_font(
+        &vec![Vec::new(); 11],
         &metrics,
         &[(b"cmap", cmap), (b"GSUB", gsub)],
-    );
-    let font = Font::from_data(data, 0).expect("the font parses");
+    )
+}
+
+const JOINED: u16 = 7;
+const JOINED_GRAVE: u16 = 10;
+
+/// Without GDEF, glyph classes come from Unicode, and COMBINING GRAPHEME JOINER is a base
+/// even though it is a nonspacing mark. Between marks of classes 232 and 230, which
+/// canonical ordering would swap, it keeps them apart, so an IgnoreMarks ligature cannot
+/// reach over it; between marks of classes 230 and 232, already in order, it does nothing
+/// and is passed over. Whether it keeps marks apart is decided before marks compose again:
+/// in a CGJ dot-below b, the grave (230) before the joiner still counts once à composes.
+/// HarfBuzz 10.4.0 shapes these texts the same way.
+#[test]
+fn grapheme_joiners_are_not_marks_without_gdef() {
+    let font = Font::from_data(joiner_font_data(), 0).expect("the font parses");
     let kept = ids(&run(&font, "a\u{315}\u{34F}\u{300}b", &latin()));
     assert_eq!(kept, [2, 5, SPACE_GLYPH, 4, 3]);
+    // a and grave compose to à, which ligates with b over the joiner.
     let joined = ids(&run(&font, "a\u{300}\u{34F}\u{315}b", &latin()));
-    assert_eq!(joined[0], LIG);
+    assert_eq!(joined, [JOINED_GRAVE, SPACE_GLYPH, 5]);
+    let joined = ids(&run(&font, "a\u{34F}b", &latin()));
+    assert_eq!(joined, [JOINED, SPACE_GLYPH]);
+    let kept = ids(&run(&font, "a\u{300}\u{34F}\u{323}b", &latin()));
+    assert_eq!(kept, [9, SPACE_GLYPH, 8, 3]);
+    let kept = ids(&run(&font, "\u{E0}\u{34F}\u{323}b", &latin()));
+    assert_eq!(kept, [9, SPACE_GLYPH, 8, 3]);
+}
+
+/// A font covers a letter and its marks when shaping composes them into a glyph it has, so
+/// fallback picks the font that draws é over one with only e.
+#[test]
+fn fallback_counts_composed_glyphs() {
+    let font = |map: &[(u32, u32, u32)]| {
+        let cmap = cmap_table(&[(3, 10, format12(map))]);
+        let data = tt_font(&vec![Vec::new(); 3], &[(500, 0); 3], &[(b"cmap", cmap)]);
+        Font::from_data(data, 0).expect("the font parses")
+    };
+    let only_e = font(&[(0x65, 0x65, 1)]);
+    let precomposed = font(&[(0x65, 0x65, 1), (0xE9, 0xE9, 2)]);
+    let runs = itemize("e\u{301}", &[&only_e, &precomposed]);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].font, 1);
+    assert_eq!(ids(&run(&precomposed, "e\u{301}", &latin())), [2]);
 }
 
 /// A font without GPOS whose acute has a single-point contour above its ink: the box its
@@ -1217,6 +1261,7 @@ fn write_fixtures_for_comparison() {
         ("masks.ttf", mask_font_data()),
         ("fallback.ttf", fallback_font_data()),
         ("extents.ttf", extents_font_data()),
+        ("joiner.ttf", joiner_font_data()),
     ] {
         std::fs::write(dir.join(name), data).expect("the fixture is written");
     }
