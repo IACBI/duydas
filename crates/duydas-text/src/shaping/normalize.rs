@@ -145,10 +145,10 @@ pub(super) fn composition(a: char, b: char) -> Option<char> {
 /// characters the font has are not decomposed or composed.
 ///
 /// In right-to-left text (`mirror`), a character with a mirror image the font has is
-/// replaced by it first, as HarfBuzz does. As in HarfBuzz, the characters of one of its
-/// grapheme clusters (see [`continuations`]) take the cluster of the first. With `reverse`,
-/// those clusters are taken in reverse order (their characters keep theirs), as HarfBuzz
-/// does to shape text in its script's direction.
+/// replaced by it first, as HarfBuzz does. As HarfBuzz merges the clusters of its grapheme
+/// clusters (see [`continuations`]), graphemes that one of those spans share the first one's
+/// cluster. With `reverse`, HarfBuzz's grapheme clusters are taken in reverse order (their
+/// characters keep theirs), as HarfBuzz does to shape text in its script's direction.
 pub(super) fn normalize(
     font: &Font,
     text: &str,
@@ -173,11 +173,16 @@ pub(super) fn normalize(
         }));
         start += grapheme.len();
     }
+    // A cluster is the union of Unicode's and HarfBuzz's grapheme clusters that overlap, so
+    // that no grapheme is split between two clusters and HarfBuzz's are never split either.
     let continues = continuations(&chars);
+    let mut grapheme = chars.first().map_or(0, |s| s.cluster);
     for i in 1..chars.len() {
-        if continues[i] {
+        let next = chars[i].cluster;
+        if continues[i] || next == grapheme {
             chars[i].cluster = chars[i - 1].cluster;
         }
+        grapheme = next;
     }
     if reverse {
         chars = reverse_graphemes(&chars, &continues);

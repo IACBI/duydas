@@ -186,17 +186,15 @@ impl<'a> Bidi<'a> {
                 }
             }
             // The characters X9 sets aside stay with the character before them when L1 has
-            // moved it (a tab before a soft hyphen, say), unless L1 reset them too.
-            let mut before: Option<u8> = None;
+            // moved it (a tab before a soft hyphen, say), unless L1 reset them too. At the
+            // start of a line they take the paragraph level, as at the start of a paragraph.
+            let mut before = paragraph.level;
             for (i, c) in text.char_indices() {
                 let at = part.start + i - line.start;
-                if let Some(level) = before
-                    && !reset[i]
-                    && is_removed(bidi_class(c))
-                {
-                    levels[at..at + c.len_utf8()].fill(level);
+                if !reset[i] && is_removed(bidi_class(c)) {
+                    levels[at..at + c.len_utf8()].fill(before);
                 }
-                before = Some(levels[at]);
+                before = levels[at];
             }
         }
         levels
@@ -236,8 +234,9 @@ impl<'a> Bidi<'a> {
         crate::floor_boundary(self.text, line.start).min(end)..end
     }
 
-    /// The paragraphs a clamped line overlaps, each with the line's bytes in it, found by
-    /// binary search so that laying out many lines stays linear.
+    /// The paragraphs a clamped line overlaps, each with the line's bytes in it. A binary
+    /// search finds the first, so a call costs the line's length plus the logarithm of the
+    /// number of paragraphs.
     fn parts<'s>(
         &'s self,
         line: &Range<usize>,
@@ -784,8 +783,10 @@ fn bracket_pairs(
     types: &[BidiClass],
 ) -> Vec<(usize, usize)> {
     const STACK: usize = 63;
+    // The opening brackets in order, each with its closing bracket once found, so the pairs
+    // come out in BD16's order without a sort; the stack holds their indices.
+    let mut openers: Vec<(usize, Option<usize>)> = Vec::new();
     let mut stack: Vec<(u32, usize)> = Vec::with_capacity(STACK);
-    let mut pairs = Vec::new();
     for (k, &i) in seq.iter().enumerate() {
         if types[i] != BidiClass::On {
             continue;
@@ -799,28 +800,18 @@ fn bracket_pairs(
             if stack.len() == STACK {
                 return Vec::new();
             }
-            stack.push((canonical_bracket(pair & 0x7FFF_FFFF), k));
+            stack.push((canonical_bracket(pair & 0x7FFF_FFFF), openers.len()));
+            openers.push((k, None));
         } else if let Some(depth) = stack
             .iter()
             .rposition(|&(closing, _)| closing == canonical_bracket(cp))
         {
-            pairs.push((stack[depth].1, k));
+            openers[stack[depth].1].1 = Some(k);
             stack.truncate(depth);
         }
     }
-    // Found in order of their closing brackets; put in order of the opening ones without
-    // a sort, which would make many pairs cost more than linear time.
-    if pairs.len() > 1 {
-        let mut closing = vec![usize::MAX; seq.len()];
-        for &(open, close) in &pairs {
-            closing[open] = close;
-        }
-        pairs.clear();
-        pairs.extend(
-            (0..seq.len())
-                .filter(|&k| closing[k] != usize::MAX)
-                .map(|k| (k, closing[k])),
-        );
-    }
-    pairs
+    openers
+        .into_iter()
+        .filter_map(|(open, close)| Some((open, close?)))
+        .collect()
 }

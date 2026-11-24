@@ -1246,3 +1246,55 @@ fn bulk_passes_need_the_whole_budget() {
     assert!(limits.exhausted());
     assert!(!limits.spend(0));
 }
+
+/// A legacy `kern` table with one format 0 subtable kerning glyphs 1 and 2 by -80, across
+/// the line (raising the second glyph) when `cross_stream`.
+fn kern_table(cross_stream: bool) -> Vec<u8> {
+    let coverage: u16 = if cross_stream { 0x0005 } else { 0x0001 };
+    let mut table = vec![0, 0, 0, 1];
+    for v in [0, 20, coverage, 1, 6, 0, 0, 1, 2] {
+        table.extend(v.to_be_bytes());
+    }
+    table.extend((-80i16).to_be_bytes());
+    table
+}
+
+#[test]
+fn kern_passes_need_the_whole_budget() {
+    // A pass costs a step per glyph; the first cross-stream subtable also hangs every glyph.
+    for (cross_stream, cost) in [(false, 2), (true, 4)] {
+        let table = kern_table(cross_stream);
+        let kern = Kern::new(&table).expect("the kern table parses");
+        let info = buffer(&Gdef::new(&[]), &[1, 2]);
+        for left in [cost - 1, cost] {
+            let limits = Limits::new(0);
+            assert!(limits.spend((1 << 20) - left));
+            let mut pos = vec![Position::with_advance(500); 2];
+            kern.apply(&info, &mut pos, &limits, false);
+            let moved = pos
+                .iter()
+                .any(|p| (p.x_advance, p.x_offset, p.y_offset) != (500, 0, 0));
+            assert_eq!(
+                moved,
+                left == cost,
+                "cross stream {cross_stream}, {left} left"
+            );
+            assert!(limits.exhausted());
+        }
+    }
+}
+
+#[test]
+fn cursive_chains_are_measured_within_a_cap() {
+    // Each glyph hangs from the one before: nine links back from glyph 9 to glyph 0.
+    let mut pos = vec![Position::with_advance(500); 10];
+    for p in &mut pos[1..] {
+        p.hang(-1);
+    }
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 10, usize::MAX), Some(9));
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 10, 9), Some(9));
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 10, 8), None);
+    // The walk stops at the glyph that becomes the parent.
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 5, usize::MAX), Some(4));
+    assert_eq!(gpos::cursive_chain_len(&pos, 0, 10, 0), Some(0));
+}

@@ -819,11 +819,12 @@ fn bidi_sample(text: &str, every: usize) -> String {
         .take(5)
         .map(|line| format!("{line}\n"))
         .collect();
-    // Only BidiTest has class sequences: its lines hold one semicolon.
+    // Only BidiTest has class sequences: its lines hold one semicolon, comments aside.
     let classes = text
         .lines()
-        .find(|line| !line.starts_with('#') && !line.starts_with('@') && !line.trim().is_empty())
-        .is_some_and(|line| line.matches(';').count() == 1);
+        .map(|line| line.split('#').next().unwrap_or("").trim())
+        .find(|data| !data.is_empty() && !data.starts_with('@'))
+        .is_some_and(|data| data.matches(';').count() == 1);
     let kept = if classes {
         " and every case of more than four classes"
     } else {

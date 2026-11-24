@@ -19,12 +19,12 @@ Two parts are needed: the Unicode Bidirectional Algorithm (UAX #9), which finds 
   - `Bidi::new(text, direction)` splits text into paragraphs (after each paragraph separator, CR LF counting as one), takes each paragraph's direction from its first strong character (P2, P3) or from the caller (HL1), and resolves a level for every byte (X1–I2, with bracket pairs, BD16, and isolates).
   - `Bidi::line_levels` applies rule L1 to a line: separators, and the whitespace and isolate formatting characters before them or at the end of the line, take the paragraph level. `Bidi::visual_runs` gives a line's runs of one level in display order (L2). `visual_order` reorders any items by level.
   - Characters that rule X9 sets aside (explicit embeddings, overrides, boundary neutrals) take the level of the character before them, so they stay with it (UAX #9, section 5.2).
-  - A line that spans paragraphs is reordered one paragraph at a time, and after L1 the characters X9 sets aside follow the character before them again.
+  - A line that spans paragraphs is reordered one paragraph at a time. After L1 the characters X9 sets aside follow the character before them again, and at the start of a line they take the paragraph level, as at the start of a paragraph.
   - Mirroring (L4) is left to shaping, through `mirror` (Bidi_Mirroring_Glyph). L3 does not apply: shaping places each mark on its base, in either direction.
-  - Levels are per byte, like every offset in the crate. The work is linear in the text: the bracket stack holds 63 entries as BD16 says, bracket pairs are ordered without sorting, embedding depth stops at 125, and the line functions find their paragraphs by binary search.
+  - Levels are per byte, like every offset in the crate. The work is linear in the text: the bracket stack holds 63 entries as BD16 says, bracket pairs are kept in the order of their opening brackets, embedding depth stops at 125, and a call to a line function costs the line's length plus a binary search over the paragraphs.
   - Bidi_Class, Bidi_Paired_Bracket and Bidi_Mirroring_Glyph are generated from the UCD by `cargo xtask unicode-gen` (`bidi_tables.rs`).
 - **Right-to-left shaping, identical to HarfBuzz 10.4.0** for the scripts ADR 0027 covers and for Hebrew. `ShapeOptions::direction` takes the run's direction; the glyphs always come out in visual order, left to right, with clusters that do not increase in a right-to-left run. As HarfBuzz does:
-  - characters take the cluster of HarfBuzz's grapheme cluster they are in (its continuation rule: marks, ZWJ and an emoji after it, emoji modifiers, the second regional indicator), in either direction;
+  - HarfBuzz merges the clusters of its grapheme clusters (its continuation rule: marks, ZWJ and an emoji after it, emoji modifiers, the second regional indicator), in either direction. Here a cluster is the union of the graphemes and HarfBuzz's grapheme clusters that overlap, so neither is split between two clusters;
   - a run is shaped in its script's own direction, so text in the other direction is reversed by those clusters and reversed back afterwards; digits or regional indicators without letters in a right-to-left script are not reversed;
   - right to left, characters with a mirror image are replaced by it, and `rtlm` (its bit for value 1) applies to those without one in the font; `rtla` and `rtlm` take the place of `ltra` and `ltrm`;
   - automatic fractions in backward text swap `numr` and `dnom`;
@@ -34,13 +34,13 @@ Two parts are needed: the Unicode Bidirectional Algorithm (UAX #9), which finds 
   - Hebrew gets HarfBuzz's Hebrew shaper: points compose into presentation forms when the font has no GPOS `mark` feature, a meteg (or another mark below) after patah or qamats and sheva or hiriq moves before the sheva or hiriq, and GPOS applies only when the font has a `hebr` script;
   - cluster merges follow HarfBuzz's in-place buffer edits, so they match in either direction.
 
-  As in HarfBuzz, a character and the marks right after it are decomposed together. A character on its own, such as a letter before a joiner, keeps the glyph the font has. Font fallback counts a Hebrew letter and point as covered when the font has their presentation form and no GPOS `mark` feature, because shaping then composes them.
+  As in HarfBuzz, a character and the marks right after it are decomposed together. A character on its own, such as a letter before a joiner, keeps the glyph the font has. Font fallback counts a Hebrew letter and point as covered when the font has their presentation form and its plan has no `mark` feature (in GSUB or GPOS), because shaping then composes them. `itemize` knows neither the language nor the features, so it judges with the defaults; a font with `mark` in only some languages can be picked for a language that does not compose.
 - **Not supported yet:**
   - Arabic, Syriac and the other joining scripts, which need HarfBuzz's Arabic shaper (joining forms, `stch`, mark reordering): they shape right to left with the default features, without joining, and are not compared;
   - the shapers ADR 0027 lists, and vertical text;
   - font fallback by direction: `itemize` does not know a run's direction, so it does not count a character as covered by its mirror image. Paragraph layout (ADR 0029) itemizes each bidi run and will pass the direction.
 - **Documented differences:**
-  - clusters are UAX #29 grapheme clusters (ADR 0027), merged where HarfBuzz's grapheme clusters span two of them (a mark after a control character, an emoji after a ZWJ). HarfBuzz's are finer at ZWNJ and between jamo. In right-to-left text with a font that has no space glyph, the default ignorables the font drops merge into a neighbouring cluster, and the neighbour differs. These are all 324 cluster differences below, in 12 icon fonts with no U+0020;
+  - clusters are UAX #29 grapheme clusters (ADR 0027), merged with HarfBuzz's grapheme clusters where those span two (a mark after a control character, an emoji after a ZWJ). HarfBuzz's are finer at ZWNJ and between jamo; where one of its grapheme clusters overlaps two graphemes, all of them share one cluster here, while HarfBuzz may give a later character of the second grapheme a cluster of its own. In right-to-left text with a font that has no space glyph, the default ignorables the font drops merge into a neighbouring cluster, and the neighbour differs. These are all 324 cluster differences below, in 12 icon fonts with no U+0020;
   - with COLR v1 color glyphs, HarfBuzz takes glyph extents from the paint tree, and its glyph 0 record gives empty extents. Fallback marks in Segoe UI Emoji are therefore placed from different boxes (the 36 offset differences below).
 
 ## Verification
@@ -49,17 +49,17 @@ Two parts are needed: the Unicode Bidirectional Algorithm (UAX #9), which finds 
 - **HarfBuzz 10.4.0 on installed fonts.** The dump test now shapes each text in 12 settings, three of them right to left (Hebrew, fractions, no kerning), and adds Hebrew, Arabic and mixed texts: **403,788 runs** (302,841 left to right, 100,947 right to left) over 437 faces. 1,080 differ:
   - 720 in Arabic, which has no Arabic shaper yet;
   - 324 clusters, and 36 Hebrew mark offsets in Segoe UI Emoji, the two documented differences above.
-  Everything else matches: glyphs, advances, offsets and clusters (compared strictly, as in ADR 0027).
+  Everything else matches: glyphs, advances and offsets, and clusters as ADR 0027 compares them. HarfBuzz's clusters are floored to grapheme starts, dropping the boundary between a control character and a mark after it; compared raw, they differ wherever HarfBuzz's are finer.
 - **Synthetic fonts.** All of these match HarfBuzz in glyphs, advances and offsets:
   - 152 right-to-left cases built with fontTools: mirroring with and without `rtlm`, cursive chains in both directions, marks on ligatures, cross-stream `kern`, fallback marks, Hebrew compositions, numeric runs;
   - 84 cases from the review: `rtlm` values, ligatures of 18 components with marks, letters before joiners, emoji after ZWJ, marks after controls;
-  - 39 on the unit tests' fixture fonts.
+  - 44 on the unit tests' fixture fonts.
 
   Clusters match too, except where HarfBuzz's are finer than a grapheme. The left-to-right cases of ADR 0027 still match.
 - **Unit tests.**
   - Five shaping tests whose expected output comes from HarfBuzz: GPOS with cursive, marks, mirroring, `rtla`/`ltra` and fractions; an old Hebrew font with presentation forms, meteg, fallback marks and a cross-stream `kern`; dropped ignorables; run direction; the review's corners.
-  - Tests of font fallback for Hebrew and of the budget for bulk passes.
-  - 12 tests of the bidi API: paragraphs, per-byte levels, L1 at line ends and separators, visual runs per paragraph, isolates and embeddings, mirroring, the depth limit, many lines, brackets and nestings in linear time, and invariants over 2,000 random texts in each paragraph direction.
+  - Tests of font fallback for Hebrew, of the budget at the boundary of a `kern` pass (with and without a cross-stream subtable), and of the cursive chain's measure.
+  - 12 tests of the bidi API: paragraphs, per-byte levels, L1 at line ends, separators and line starts, visual runs per paragraph, isolates and embeddings, mirroring, the depth limit, long input (many lines, brackets and nestings) within a time limit, and random texts in each paragraph direction, whose runs are checked against runs built from `line_levels`.
 - **Performance.** Left-to-right shaping is unchanged: `shape_bench` gives 192–251 ns per character on the ADR 0027 messages after the review's fixes (187–245 before), within its ranges.
 
 ## Review
@@ -82,6 +82,16 @@ Codex (`gpt-6.2-sol`, read-only, high effort) reviewed the pull request. It foun
   - wording in docs, the sample headers and the workflow's paths;
   - a fraction test that could not tell the forms apart.
 - **Deferred:** fallback by direction for mirrored characters, to paragraph layout (ADR 0029), where runs have a direction.
+
+A second pass over the fixes found 3 medium and 4 low issues, all fixed:
+
+- clusters taken from HarfBuzz's grapheme clusters could split a grapheme (`a`, ZWJ, an emoji, ZWNJ), so clusters are now the union of both;
+- the cursive check did not charge a chain it rejected, and charged two walks of three;
+- a cross-stream `kern` pass did not charge hanging every glyph, and fallback positioning scanned each cluster twice;
+- X9 characters at the start of a wrapped line kept the level of the line before;
+- bracket pairs took memory for the whole sequence, and now take it for the opening brackets;
+- the docs overstated the line functions' cost and the comparison, and the sample header counted semicolons in comments;
+- tests: Hebrew for the wrapped ligature component (Latin right to left is reversed first), runs checked against an oracle of their own, and the budget checked at the `kern` and cursive call sites.
 
 ## Consequences
 

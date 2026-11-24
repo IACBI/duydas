@@ -271,7 +271,10 @@ pub struct Run {
 /// (default-ignorable characters and variation selectors aside; a character also counts as
 /// covered when the font has its canonical decomposition, unless a variation selector
 /// follows it, and a letter with marks when shaping composes them into a glyph the font has,
-/// such as e and U+0301 into é). A cluster of Common or Inherited
+/// such as e and U+0301 into é, or a Hebrew letter and point into a presentation form when
+/// the font does not position marks). Coverage is judged as shaping left to right in the
+/// default language with no extra features: a character is not counted as covered by its
+/// mirror image. A cluster of Common or Inherited
 /// characters, such as a space or a digit, stays with the font before it when that font
 /// covers it. A cluster no font covers goes to the first font that has its first character,
 /// so a letter keeps its font when only a mark after it is missing; failing that, it stays
@@ -355,7 +358,10 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
 /// Whether `font` can draw every character of `grapheme` that needs a glyph, one by one
 /// or as shaping maps them in left-to-right text of the script tagged `script`, composing
 /// a letter and its marks (Hangul jamo, for Hangul; points into presentation forms, for
-/// Hebrew) into a glyph the font has.
+/// Hebrew) into a glyph the font has. Shaping decides on presentation forms from the plan
+/// for its language and features, which `itemize` does not know: this takes the default
+/// language and features, which is what a font with a `mark` feature for every language
+/// gives.
 fn covers(font: &Font, grapheme: &str, script: Option<[u8; 4]>) -> bool {
     let mapped = || {
         let shaper = match script {

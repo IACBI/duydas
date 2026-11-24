@@ -181,19 +181,12 @@ fn position_cluster(
     end: usize,
     adjust: bool,
 ) {
-    if end - start < 2 {
+    // Only the first glyph can be a base: `position_marks` starts a cluster at each one. A
+    // cluster of marks alone, at the start of the text, has none.
+    if end - start < 2 || info[start].unicode_mark {
         return;
     }
-    let mut i = start;
-    while i < end {
-        if !info[i].unicode_mark {
-            let j = (i + 1..end).find(|&j| !info[j].unicode_mark).unwrap_or(end);
-            position_around_base(cx, info, pos, i, j, adjust);
-            i = j;
-        } else {
-            i += 1;
-        }
-    }
+    position_around_base(cx, info, pos, start, end, adjust);
 }
 
 fn zero_mark_advances(

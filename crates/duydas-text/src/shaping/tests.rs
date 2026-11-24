@@ -1850,12 +1850,17 @@ fn review_cases_shape_like_harfbuzz() {
         [(V_BRACKET, 0, 500, 0, 0), (V_ALEF, 1, 500, 0, 0)]
     );
     // A mark after component 16 of 18 keeps component 0 (four bits), which fallback
-    // positioning takes as -1: a component's width before the ligature, after it right to
-    // left. After component 2 it sits over the second eighteenth.
+    // positioning takes as -1: a component's width before the ligature, or after it in
+    // right-to-left text (Hebrew here; Latin shaped right to left is reversed first, so the
+    // mark follows component 3). After component 2 it sits over the second eighteenth.
     let text = "a".repeat(16) + "\u{301}aa";
     assert_eq!(
         shaped(&text, 'a', &[], Ltr),
         [(V_LIGATURE, 0, 1800, 0, 0), (V_ACUTE, 0, 0, -800, 212)]
+    );
+    assert_eq!(
+        shaped(&text, '\u{5D0}', &[], Rtl),
+        [(V_ACUTE, 0, 0, 1000, 212), (V_LIGATURE, 0, 1800, 0, 0)]
     );
     assert_eq!(
         shaped(&text, 'a', &[], Rtl),
@@ -1867,7 +1872,7 @@ fn review_cases_shape_like_harfbuzz() {
         [(V_LIGATURE, 0, 1800, 0, 0), (V_ACUTE, 0, 0, -350, 212)]
     );
     // A letter before a joiner is mapped on its own, so the Angstrom sign the font has is
-    // kept; before a mark it is decomposed so that the mark can compose.
+    // kept; before a mark it is decomposed, as a base with marks is.
     assert_eq!(
         shaped("\u{212B}\u{200D}\u{308}", 'a', &[], Ltr),
         [
@@ -1880,11 +1885,22 @@ fn review_cases_shape_like_harfbuzz() {
         shaped("\u{212B}\u{308}", 'a', &[], Ltr),
         [(V_A_RING, 0, 500, 0, 0), (V_DIAERESIS, 0, 0, -150, 12)]
     );
-    // An emoji after ZWJ continues HarfBuzz's cluster though it starts a grapheme, so it
-    // joins the cluster before; right to left that keeps clusters from increasing.
+    // An emoji after ZWJ continues HarfBuzz's grapheme cluster though it starts one of
+    // Unicode's, so the two graphemes share a cluster; right to left that keeps clusters
+    // from increasing. A ZWNJ after it, in the emoji's grapheme but not in HarfBuzz's,
+    // shares it too, so no grapheme is split between clusters (HarfBuzz gives it 8).
     assert_eq!(
         shaped("a\u{200D}\u{1F600}", 'a', &[], Ltr),
         [
+            (V_A, 0, 500, 0, 0),
+            (SPACE_GLYPH, 0, 0, 0, 0),
+            (V_GRIN, 0, 500, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("a\u{200D}\u{1F600}\u{200C}", 'a', &[], Rtl),
+        [
+            (SPACE_GLYPH, 0, 0, 0, 0),
             (V_A, 0, 500, 0, 0),
             (SPACE_GLYPH, 0, 0, 0, 0),
             (V_GRIN, 0, 500, 0, 0)

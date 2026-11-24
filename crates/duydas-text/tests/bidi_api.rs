@@ -129,6 +129,8 @@ fn removed_characters_take_the_level_before_them() {
     let bidi = Bidi::new(text, Some(Direction::LeftToRight));
     assert_eq!(bidi.levels()[3..6], [1, 1, 1]);
     assert_eq!(bidi.line_levels(0..text.len()), [0, 0, 0, 0, 0, 0, 1, 1]);
+    // At the start of a line they take the paragraph level, as at the start of a paragraph.
+    assert_eq!(bidi.line_levels(4..8), [0, 0, 1, 1]);
     // An isolate's text is resolved on its own.
     let text = "\u{5D0} \u{2066}abc\u{2069}";
     let bidi = Bidi::new(text, None);
@@ -213,6 +215,15 @@ fn long_text_takes_linear_time() {
     assert!(started.elapsed() < std::time::Duration::from_secs(60));
 }
 
+/// The character boundary at or before `at`, as the API clamps a line.
+fn floor(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
 /// A small xorshift generator, so the cases are the same on every run.
 struct Random(u64);
 
@@ -265,43 +276,38 @@ fn random_text_keeps_the_invariants() {
                 assert!(at.iter().all(|&l| l == at[0]), "{text:?}");
             }
             assert!(levels.iter().all(|&l| l <= MAX_DEPTH + 1));
-            // Any line's runs cover it once, each run on character boundaries and one level.
+            // Any line's runs are its paragraphs' runs of one level, from line_levels, each
+            // paragraph reordered on its own (L2) and shown in order.
             let a = random.below(text.len() + 1);
             let b = random.below(text.len() + 1);
-            let (start, end) = (a.min(b), a.max(b));
-            let line_levels = bidi.line_levels(start..end);
-            let runs = bidi.visual_runs(start..end);
-            let mut covered: Vec<_> = runs.iter().map(|r| r.range.clone()).collect();
-            covered.sort_by_key(|r| r.start);
-            let mut at = covered.first().map_or(0, |r| r.start);
-            for r in &covered {
-                assert_eq!(r.start, at, "{text:?} {start}..{end}");
-                assert!(text.is_char_boundary(r.start) && text.is_char_boundary(r.end));
-                at = r.end;
-            }
-            assert_eq!(
-                covered.iter().map(|r| r.len()).sum::<usize>(),
-                line_levels.len()
-            );
-            // The runs of each paragraph, in visual order, are those visual_order gives, and
-            // the paragraphs keep their order.
-            let mut shown = Vec::new();
+            let line = a.min(b)..a.max(b);
+            let start = floor(&text, line.start);
+            let end = floor(&text, line.end);
+            let line_levels = bidi.line_levels(line.clone());
+            assert_eq!(line_levels.len(), end - start, "{text:?} {line:?}");
+            let mut expected = Vec::new();
             for p in bidi.paragraphs() {
-                let mine: Vec<_> = covered
-                    .iter()
-                    .filter(|r| p.range.contains(&r.start))
-                    .cloned()
-                    .collect();
-                let logical: Vec<u8> = mine
-                    .iter()
-                    .map(|r| runs.iter().find(|v| v.range == *r).map_or(0, |v| v.level))
-                    .collect();
-                shown.extend(visual_order(&logical).into_iter().map(|i| mine[i].clone()));
+                let (from, to) = (p.range.start.max(start), p.range.end.min(end));
+                let mut runs: Vec<(std::ops::Range<usize>, u8)> = Vec::new();
+                for at in from..to {
+                    let level = line_levels[at - start];
+                    match runs.last_mut() {
+                        Some((range, l)) if *l == level => range.end = at + 1,
+                        _ => runs.push((at..at + 1, level)),
+                    }
+                }
+                let levels: Vec<u8> = runs.iter().map(|r| r.1).collect();
+                expected.extend(visual_order(&levels).into_iter().map(|i| runs[i].clone()));
             }
-            assert_eq!(
-                shown,
-                runs.iter().map(|r| r.range.clone()).collect::<Vec<_>>()
-            );
+            let shown: Vec<_> = bidi
+                .visual_runs(line.clone())
+                .into_iter()
+                .map(|r| (r.range, r.level))
+                .collect();
+            assert_eq!(shown, expected, "{text:?} {line:?}");
+            for (range, _) in &shown {
+                assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
+            }
         }
     }
 }

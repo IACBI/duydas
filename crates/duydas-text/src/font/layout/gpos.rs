@@ -195,10 +195,14 @@ impl Apply<'_, '_> {
         } else {
             (j, i, exit_y - entry_y)
         };
-        // The chain the attachment reverses is walked twice, which the budget must cover
-        // before anything changes.
-        let chain = cursive_chain_len(self.pos, child, parent, self.limits.left() / 2)?;
-        if !self.limits.spend(2 * chain) {
+        // The chain the attachment reverses is walked to measure it, then to collect it and
+        // to reverse it: the budget must cover all three before anything changes. A chain
+        // longer than that spends the budget, walked or not.
+        let Some(chain) = cursive_chain_len(self.pos, child, parent, self.limits.left() / 3) else {
+            self.limits.spend(usize::MAX);
+            return None;
+        };
+        if !self.limits.spend(3 * chain) {
             return None;
         }
         let pos = &mut *self.pos;
@@ -415,7 +419,7 @@ impl Apply<'_, '_> {
 /// glyphs it was attached to hang from it instead (HarfBuzz `reverse_cursive_minor_offset`).
 /// The length of the cursive chain from `child` that [`reverse_cursive_chain`] reverses, or
 /// None if it is longer than `cap`.
-fn cursive_chain_len(
+pub(super) fn cursive_chain_len(
     pos: &[Position],
     child: usize,
     new_parent: usize,

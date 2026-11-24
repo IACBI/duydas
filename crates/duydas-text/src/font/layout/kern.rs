@@ -98,8 +98,14 @@ impl<'a> Kern<'a> {
         let mut chained = false;
         let mut raised = false;
         for subtable in &self.subtables {
-            // A pass over the run, whatever it finds: marks passed over and pairs tried.
-            if !limits.spend(info.len()) {
+            // A pass over the run, whatever it finds: marks passed over and pairs tried; the
+            // first cross-stream subtable hangs every glyph first.
+            let setup = if subtable.cross_stream && !chained {
+                n
+            } else {
+                0
+            };
+            if !limits.spend(n + setup) {
                 return raised;
             }
             if subtable.cross_stream && !chained {
