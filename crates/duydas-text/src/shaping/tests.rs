@@ -6,8 +6,8 @@ use std::sync::Arc;
 use super::normalize::{composition, decomposition};
 use super::*;
 use crate::font::layout::tests::{
-    alternates, gdef, layout_table, ligatures, lookup, mark_attach, mark_to_ligature, multiple,
-    pair, simple_table, single,
+    Anchors, alternates, cursive, gdef, layout_table, ligatures, lookup, mark_attach,
+    mark_to_ligature, multiple, pair, simple_table, single,
 };
 use crate::font::tests::{
     cmap_table, collect, font_dirs, format12, format14, simple_glyph, tt_font,
@@ -1143,6 +1143,7 @@ fn shaped_with(
         script: Script::of(script),
         language: Language::default(),
         features,
+        ..ShapeOptions::default()
     };
     run(font, text, &options)
         .iter()
@@ -1263,6 +1264,459 @@ fn unicode_driven_features_follow_harfbuzz() {
     );
 }
 
+// Glyphs of the right-to-left font.
+const R_ALEF: u16 = 2;
+const R_BET: u16 = 3;
+const R_GIMEL: u16 = 4;
+const R_VAV: u16 = 5;
+const R_YOD: u16 = 6;
+const R_QAMATS: u16 = 7;
+const R_HIRIQ: u16 = 8;
+const R_PAREN_LEFT: u16 = 9;
+const R_PAREN_RIGHT: u16 = 10;
+const R_BRACKET: u16 = 11;
+const R_BRACKET_RTLM: u16 = 12;
+const R_GIMEL_RTLA: u16 = 13;
+const R_GIMEL_LTRA: u16 = 14;
+const R_ONE: u16 = 15;
+const R_TWO: u16 = 16;
+const R_SLASH: u16 = 17;
+const R_ONE_NUMR: u16 = 18;
+const R_TWO_DNOM: u16 = 19;
+
+/// A Hebrew font with layout tables for `hebr`: direction forms (`rtla`, `ltra`, and
+/// `rtlm` for the bracket, whose mirror image it lacks), fraction forms, cursive attachment
+/// (one lookup flagged right to left) and marks above the letters.
+fn rtl_font_data() -> Vec<u8> {
+    let cmap = cmap_table(&[(
+        3,
+        10,
+        format12(&[
+            (0x20, 0x20, 1),
+            (0x28, 0x29, u32::from(R_PAREN_LEFT)),
+            (0x31, 0x32, u32::from(R_ONE)),
+            (0x5B, 0x5B, u32::from(R_BRACKET)),
+            (0x5B4, 0x5B4, u32::from(R_HIRIQ)),
+            (0x5B8, 0x5B8, u32::from(R_QAMATS)),
+            (0x5D0, 0x5D2, u32::from(R_ALEF)),
+            (0x5D5, 0x5D5, u32::from(R_VAV)),
+            (0x5D9, 0x5D9, u32::from(R_YOD)),
+            (0x2044, 0x2044, u32::from(R_SLASH)),
+        ]),
+    )]);
+    let classes: Vec<(u16, u16)> = (1..20)
+        .map(|g| match g {
+            R_QAMATS | R_HIRIQ => (g, 3),
+            _ => (g, 1),
+        })
+        .collect();
+    let gsub = layout_table(
+        *b"hebr",
+        &[],
+        &[
+            (*b"dnom", &[3]),
+            (*b"ltra", &[4]),
+            (*b"numr", &[2]),
+            (*b"rtla", &[0]),
+            (*b"rtlm", &[1]),
+        ],
+        vec![
+            lookup(1, 0, vec![single(&[(R_GIMEL, R_GIMEL_RTLA)])]),
+            lookup(1, 0, vec![single(&[(R_BRACKET, R_BRACKET_RTLM)])]),
+            lookup(1, 0, vec![single(&[(R_ONE, R_ONE_NUMR)])]),
+            lookup(1, 0, vec![single(&[(R_TWO, R_TWO_DNOM)])]),
+            lookup(1, 0, vec![single(&[(R_GIMEL, R_GIMEL_LTRA)])]),
+        ],
+    );
+    let marks = [(R_QAMATS, 0, (100, 0)), (R_HIRIQ, 0, (50, -10))];
+    let bases: Vec<Anchors> = [R_ALEF, R_BET, R_GIMEL, R_GIMEL_RTLA, R_VAV, R_YOD]
+        .map(|g| (g, vec![Some((300, -50))]))
+        .to_vec();
+    let gpos = layout_table(
+        *b"hebr",
+        &[],
+        &[(*b"curs", &[0, 1]), (*b"mark", &[2])],
+        vec![
+            lookup(
+                3,
+                0,
+                vec![cursive(&[
+                    (R_ALEF, Some((500, 100)), Some((0, 50))),
+                    (R_BET, Some((550, 0)), Some((20, 80))),
+                    (R_GIMEL_RTLA, Some((600, 30)), Some((10, 0))),
+                ])],
+            ),
+            lookup(
+                3,
+                1,
+                vec![cursive(&[
+                    (R_VAV, Some((400, 60)), Some((30, 10))),
+                    (R_YOD, Some((420, 0)), Some((5, 90))),
+                ])],
+            ),
+            lookup(4, 0, vec![mark_attach(&marks, &bases, 1)]),
+        ],
+    );
+    let advances = [
+        500, 250, 500, 550, 600, 300, 250, 0, 0, 300, 300, 300, 310, 610, 590, 500, 500, 100, 400,
+        400,
+    ];
+    let metrics: Vec<(u16, i16)> = advances.iter().map(|&a| (a, 0)).collect();
+    tt_font(
+        &vec![Vec::new(); advances.len()],
+        &metrics,
+        &[
+            (b"cmap", cmap),
+            (b"GDEF", gdef(&classes, &[], &[])),
+            (b"GSUB", gsub),
+            (b"GPOS", gpos),
+        ],
+    )
+}
+
+// Glyphs of the old-style Hebrew font.
+const H_ALEF: u16 = 2;
+const H_BET: u16 = 3;
+const H_VAV: u16 = 4;
+const H_PATAH: u16 = 5;
+const H_HOLAM: u16 = 6;
+const H_DAGESH: u16 = 7;
+const H_SHEVA: u16 = 8;
+const H_METEG: u16 = 9;
+const H_ALEF_PATAH: u16 = 10;
+const H_VAV_HOLAM: u16 = 11;
+const H_ALEF_DAGESH: u16 = 12;
+
+/// A Hebrew font in the old style, with outlines, presentation forms and a legacy kern
+/// table (alef bet -100, bet alef -60, and with `cross_stream` a subtable raising vav by
+/// 50 after bet), and no layout tables but GPOS `mark` for Latin when `latin_marks`.
+fn old_hebrew_font_data(cross_stream: bool, latin_marks: bool) -> Vec<u8> {
+    let cmap = cmap_table(&[(
+        3,
+        10,
+        format12(&[
+            (0x20, 0x20, 1),
+            (0x5B0, 0x5B0, u32::from(H_SHEVA)),
+            (0x5B7, 0x5B7, u32::from(H_PATAH)),
+            (0x5B9, 0x5B9, u32::from(H_HOLAM)),
+            (0x5BC, 0x5BC, u32::from(H_DAGESH)),
+            (0x5BD, 0x5BD, u32::from(H_METEG)),
+            (0x5D0, 0x5D1, u32::from(H_ALEF)),
+            (0x5D5, 0x5D5, u32::from(H_VAV)),
+            (0xFB2E, 0xFB2E, u32::from(H_ALEF_PATAH)),
+            (0xFB30, 0xFB30, u32::from(H_ALEF_DAGESH)),
+            (0xFB4B, 0xFB4B, u32::from(H_VAV_HOLAM)),
+        ]),
+    )]);
+    let rect = |x0: i16, y0: i16, x1: i16, y1: i16| {
+        simple_glyph(&[&[
+            (x0, y0, true),
+            (x0, y1, true),
+            (x1, y1, true),
+            (x1, y0, true),
+        ]])
+    };
+    let letter = rect(50, 0, 550, 600);
+    let below = rect(-200, -150, -100, -50);
+    let glyphs = vec![
+        Vec::new(),
+        Vec::new(),
+        letter.clone(),
+        letter.clone(),
+        rect(50, 0, 250, 600),
+        below.clone(),
+        rect(-150, 650, -100, 700),
+        rect(-100, 200, -50, 250),
+        below.clone(),
+        below,
+        letter.clone(),
+        letter.clone(),
+        letter,
+    ];
+    let advances = [500, 250, 600, 600, 300, 0, 0, 0, 0, 0, 600, 300, 600];
+    let metrics: Vec<(u16, i16)> = advances
+        .iter()
+        .zip([0, 0, 50, 50, 50, -200, -150, -100, -200, -200, 50, 50, 50])
+        .map(|(&a, l)| (a, l))
+        .collect();
+    let subtable = |coverage: u16, pairs: &[(u16, u16, i16)]| {
+        let n = pairs.len() as u16;
+        let selector = n.ilog2() as u16;
+        let range = 6 << selector;
+        let mut s = Vec::new();
+        for v in [0, 14 + 6 * n, coverage, n, range, selector, 6 * n - range] {
+            s.extend(v.to_be_bytes());
+        }
+        for &(left, right, value) in pairs {
+            s.extend(left.to_be_bytes());
+            s.extend(right.to_be_bytes());
+            s.extend(value.to_be_bytes());
+        }
+        s
+    };
+    let mut kern = vec![0, 0, 0, if cross_stream { 2 } else { 1 }];
+    kern.extend(subtable(
+        0x0001,
+        &[(H_ALEF, H_BET, -100), (H_BET, H_ALEF, -60)],
+    ));
+    if cross_stream {
+        kern.extend(subtable(0x0005, &[(H_BET, H_VAV, 50)]));
+    }
+    let mut tables: Vec<(&[u8; 4], Vec<u8>)> = vec![(b"cmap", cmap), (b"kern", kern)];
+    if latin_marks {
+        let marks = [(H_PATAH, 0, (0, 0)), (H_DAGESH, 0, (0, 0))];
+        let gpos = layout_table(
+            *b"latn",
+            &[],
+            &[(*b"mark", &[0])],
+            vec![lookup(
+                4,
+                0,
+                vec![mark_attach(&marks, &[(H_ALEF, vec![Some((300, 0))])], 1)],
+            )],
+        );
+        tables.push((b"GPOS", gpos));
+    }
+    tt_font(&glyphs, &metrics, &tables)
+}
+
+fn hebrew(direction: Direction) -> ShapeOptions<'static> {
+    ShapeOptions {
+        script: Script::of('\u{5D0}'),
+        language: Language::from_bcp47("he"),
+        direction,
+        ..ShapeOptions::default()
+    }
+}
+
+fn shaped_rtl(font: &Font, text: &str, direction: Direction) -> Vec<(u16, usize, i32, i32, i32)> {
+    run(font, text, &hebrew(direction))
+        .iter()
+        .map(|g| (g.glyph.0, g.cluster, g.x_advance, g.x_offset, g.y_offset))
+        .collect()
+}
+
+/// Right-to-left shaping of Hebrew with GPOS, checked against HarfBuzz 10.4.0 on the same
+/// font: glyphs come out reversed with descending clusters, cursive attachment joins the
+/// other way, marks follow their base, brackets mirror (or take `rtlm` without a mirror
+/// glyph), and `rtla` replaces `ltra`. Left to right, Hebrew is reversed by grapheme and
+/// shaped the same way, unless it is only digits.
+#[test]
+fn right_to_left_runs_shape_like_harfbuzz() {
+    use Direction::{LeftToRight as Ltr, RightToLeft as Rtl};
+    let font = Font::from_data(rtl_font_data(), 0).expect("the font parses");
+    let shaped = |text: &str, direction| shaped_rtl(&font, text, direction);
+    assert_eq!(
+        shaped("\u{5D0}\u{5D1}\u{5D2}", Rtl),
+        [
+            (R_GIMEL_RTLA, 4, 600, 0, 100),
+            (R_BET, 2, 530, -20, 50),
+            (R_ALEF, 0, 500, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("\u{5D0}\u{5D1}\u{5D2}", Ltr),
+        [
+            (R_ALEF, 0, 500, 0, -20),
+            (R_BET, 2, 530, -20, 0),
+            (R_GIMEL_LTRA, 4, 590, 0, 0)
+        ]
+    );
+    // A lookup flagged right to left hangs the first glyph from the second.
+    assert_eq!(
+        shaped("\u{5D5}\u{5D9}", Rtl),
+        [(R_YOD, 2, 420, 0, 0), (R_VAV, 0, 270, -30, -10)]
+    );
+    assert_eq!(
+        shaped("\u{5D5}\u{5D9}", Ltr),
+        [(R_VAV, 0, 400, 0, 0), (R_YOD, 2, 245, -5, -30)]
+    );
+    assert_eq!(
+        shaped("\u{5D0}\u{5B8}\u{5D1}\u{5B4}\u{5B8}", Rtl),
+        [
+            (R_HIRIQ, 4, 0, 250, -40),
+            (R_QAMATS, 4, 0, 200, -50),
+            (R_BET, 4, 550, 0, 0),
+            (R_QAMATS, 0, 0, 200, -50),
+            (R_ALEF, 0, 500, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("(\u{5D0})[", Rtl),
+        [
+            (R_BRACKET_RTLM, 4, 310, 0, 0),
+            (R_PAREN_LEFT, 3, 300, 0, 0),
+            (R_ALEF, 1, 500, 0, 0),
+            (R_PAREN_RIGHT, 0, 300, 0, 0)
+        ]
+    );
+    // Digits alone stay left to right in a Hebrew run; right to left the fraction's
+    // numerator and denominator swap, as in HarfBuzz.
+    assert_eq!(
+        shaped("1\u{2044}2", Ltr),
+        [
+            (R_ONE_NUMR, 0, 400, 0, 0),
+            (R_SLASH, 1, 100, 0, 0),
+            (R_TWO_DNOM, 4, 400, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("1\u{2044}2", Rtl),
+        [
+            (R_TWO, 4, 500, 0, 0),
+            (R_SLASH, 1, 100, 0, 0),
+            (R_ONE, 0, 500, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("\u{5D0} 1\u{2044}2", Ltr),
+        [
+            (R_ALEF, 0, 500, 0, 0),
+            (SPACE_GLYPH, 2, 250, 0, 0),
+            (R_ONE_NUMR, 3, 400, 0, 0),
+            (R_SLASH, 4, 100, 0, 0),
+            (R_TWO_DNOM, 7, 400, 0, 0)
+        ]
+    );
+}
+
+/// Hebrew in an old font, checked against HarfBuzz 10.4.0: without GPOS mark positioning
+/// points compose into presentation forms, meteg goes before sheva, the kern table kerns
+/// in visual order and marks fall back to their combining classes. A font with a `mark`
+/// feature (here only for Latin, so GPOS is left out) keeps the points apart.
+#[test]
+fn old_hebrew_fonts_shape_like_harfbuzz() {
+    use Direction::{LeftToRight as Ltr, RightToLeft as Rtl};
+    let font = Font::from_data(old_hebrew_font_data(false, false), 0).expect("the font parses");
+    let shaped = |text: &str, direction| shaped_rtl(&font, text, direction);
+    assert_eq!(
+        shaped("\u{5D0}\u{5D1}\u{5D0}", Rtl),
+        [
+            (H_ALEF, 4, 550, 0, 0),
+            (H_BET, 2, 520, -50, 0),
+            (H_ALEF, 0, 570, -30, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("\u{5D0}\u{5B7}\u{5D1}", Rtl),
+        [(H_BET, 4, 600, 0, 0), (H_ALEF_PATAH, 0, 600, 0, 0)]
+    );
+    assert_eq!(
+        shaped("\u{5D5}\u{5B9}\u{5D0}\u{5BC}", Ltr),
+        [(H_VAV_HOLAM, 0, 300, 0, 0), (H_ALEF_DAGESH, 4, 600, 0, 0)]
+    );
+    assert_eq!(
+        shaped("\u{5D1}\u{5B7}\u{5B0}\u{5BD}", Rtl),
+        [
+            (H_SHEVA, 0, 0, 450, -336),
+            (H_METEG, 0, 0, 450, -174),
+            (H_PATAH, 0, 0, 450, -12),
+            (H_BET, 0, 600, 0, 0)
+        ]
+    );
+    assert_eq!(
+        shaped("\u{5D0}\u{5B0}\u{5B7}\u{5BD}", Rtl),
+        [
+            (H_SHEVA, 0, 0, 450, -174),
+            (H_METEG, 0, 0, 450, -12),
+            (H_ALEF_PATAH, 0, 600, 0, 0)
+        ]
+    );
+    let cross = Font::from_data(old_hebrew_font_data(true, false), 0).expect("the font parses");
+    assert_eq!(
+        shaped_rtl(&cross, "\u{5D0}\u{5D1}\u{5D5}\u{5B7}", Ltr),
+        [
+            (H_ALEF, 0, 550, 0, 0),
+            (H_BET, 2, 550, -50, 0),
+            (H_PATAH, 4, 0, 0, 0),
+            (H_VAV, 4, 300, 0, 50)
+        ]
+    );
+    assert_eq!(
+        shaped_rtl(&cross, "\u{5D0}\u{5D1}\u{5D5}\u{5B7}", Rtl),
+        [
+            (H_PATAH, 4, 0, 0, 0),
+            (H_VAV, 4, 300, 0, 0),
+            (H_BET, 2, 570, 0, 0),
+            (H_ALEF, 0, 570, -30, 0)
+        ]
+    );
+    let marked = Font::from_data(old_hebrew_font_data(false, true), 0).expect("the font parses");
+    assert_eq!(
+        shaped_rtl(&marked, "\u{5D0}\u{5B7}\u{5D1}\u{5BC}", Rtl),
+        [
+            (H_DAGESH, 4, 0, 375, 0),
+            (H_BET, 4, 570, 0, 0),
+            (H_PATAH, 0, 0, 450, -12),
+            (H_ALEF, 0, 570, -30, 0)
+        ]
+    );
+}
+
+/// Right to left, a removed default ignorable merges into its neighbour as HarfBuzz's
+/// in-place deletion does (checked against HarfBuzz 10.4.0), and many of them before a
+/// long cluster take linear time.
+#[test]
+fn right_to_left_dropped_ignorables_merge_backward() {
+    let font = Font::from_data(spaceless_font_data(), 0).expect("the font parses");
+    let options = ShapeOptions {
+        direction: Direction::RightToLeft,
+        ..latin()
+    };
+    let shaped = |text: &str| {
+        let glyphs = run(&font, text, &options);
+        (ids(&glyphs), clusters(&glyphs))
+    };
+    assert_eq!(shaped("\u{2060}a"), (vec![1], vec![0]));
+    assert_eq!(shaped("a\u{2060}a"), (vec![1, 1], vec![1, 0]));
+    let started = std::time::Instant::now();
+    let text = "\u{2060}".repeat(100_000) + "a" + &"\u{301}".repeat(100_000);
+    let (glyphs, clusters) = shaped(&text);
+    assert_eq!(glyphs.len(), 100_001);
+    assert!(clusters.iter().all(|&c| c == 0));
+    assert!(started.elapsed() < std::time::Duration::from_secs(60));
+}
+
+/// HarfBuzz shapes a run in its script's direction, reversing text written the other way,
+/// except digits (or regional indicators) without letters in a right-to-left script.
+#[test]
+fn runs_are_shaped_in_their_script_direction() {
+    assert!(numeric("12"));
+    assert!(numeric("\u{1F1F9}\u{1F1F7}"));
+    assert!(numeric("1\u{2044}2 %"));
+    assert!(!numeric("1a"));
+    assert!(!numeric("\u{5D0}1"));
+    assert!(!numeric("()"));
+    assert_eq!(
+        Script::of('\u{5D0}').horizontal_direction(),
+        Some(Direction::RightToLeft)
+    );
+    assert_eq!(
+        Script::of('\u{627}').horizontal_direction(),
+        Some(Direction::RightToLeft)
+    );
+    assert_eq!(
+        Script::of('a').horizontal_direction(),
+        Some(Direction::LeftToRight)
+    );
+    assert_eq!(
+        Script::COMMON.horizontal_direction(),
+        Some(Direction::LeftToRight)
+    );
+    assert_eq!(Script::of('\u{16A0}').horizontal_direction(), None);
+    // Latin shaped right to left: clusters reversed as HarfBuzz reverses them (a ZWNJ on its
+    // own), marks kept after their base. The ZWNJ's cluster is that of its grapheme, where
+    // HarfBuzz gives it its own (4): the documented difference in cluster boundaries.
+    let font = test_font();
+    let options = ShapeOptions {
+        direction: Direction::RightToLeft,
+        ..latin()
+    };
+    let glyphs = run(&font, "e\u{301}a\u{200C}o", &options);
+    assert_eq!(ids(&glyphs), [O, SPACE_GLYPH, A, E_ACUTE]);
+    assert_eq!(clusters(&glyphs), [7, 3, 3, 0]);
+}
+
 /// Writes the fixture fonts into the directory named by DUYDAS_FIXTURE_DIR, to check the
 /// expectations above against another shaper.
 #[test]
@@ -1281,6 +1735,10 @@ fn write_fixtures_for_comparison() {
         ("fallback.ttf", fallback_font_data()),
         ("extents.ttf", extents_font_data()),
         ("joiner.ttf", joiner_font_data()),
+        ("rtl.ttf", rtl_font_data()),
+        ("hebrew.ttf", old_hebrew_font_data(false, false)),
+        ("hebrew-cross.ttf", old_hebrew_font_data(true, false)),
+        ("hebrew-latin-marks.ttf", old_hebrew_font_data(false, true)),
     ] {
         std::fs::write(dir.join(name), data).expect("the fixture is written");
     }
@@ -1385,7 +1843,7 @@ fn canonical_decompositions_and_compositions() {
     assert_eq!(composition('\u{C5}', '\u{301}'), Some('\u{1FA}'));
 }
 
-const SAMPLES: [&str; 9] = [
+const SAMPLES: [&str; 11] = [
     "Şişli'de ığdır İzmir ĞÜŞİÖÇ fiyat ffi office",
     "The quick brown fox jumps over the lazy dog. AVATAR Wave To",
     "日本語のテキストを表示します。カタカナ、ひらがな、漢字！",
@@ -1395,10 +1853,15 @@ const SAMPLES: [&str; 9] = [
     "한국어 텍스트 각",
     "\u{301}\u{301}\u{301} leading marks",
     "a\u{300}\u{301}\u{302}\u{303}\u{304}\u{305}\u{306}\u{307}\u{308}\u{309}\u{30A}\u{30B}\u{30C}",
+    // Hebrew with points (patah, sheva and meteg, which the Hebrew shaper reorders),
+    // brackets that mirror, digits and a fraction.
+    "שָׁלוֹם (עוֹלָם) [א\u{5B0}\u{5B7}\u{5BD}] 12 1\u{2044}2 בְּרֵאשִׁית",
+    "١٢٣ «مرحبا» (abc)",
 ];
 
 /// Shapes sample text with every installed face: glyphs exist, clusters are grapheme
-/// boundaries in order, and no real font exhausts the step budget.
+/// boundaries in order (descending right to left), and no real font exhausts the step
+/// budget.
 #[test]
 fn installed_fonts_shape() {
     let mut files = Vec::new();
@@ -1434,7 +1897,12 @@ fn installed_fonts_shape() {
             };
             faces += 1;
             for (sample, bounds) in SAMPLES.iter().zip(&boundaries) {
-                for language in ["", "tr", "ja"] {
+                for (language, direction) in [
+                    ("", Direction::LeftToRight),
+                    ("tr", Direction::LeftToRight),
+                    ("ja", Direction::LeftToRight),
+                    ("", Direction::RightToLeft),
+                ] {
                     let script = sample
                         .chars()
                         .map(Script::of)
@@ -1444,10 +1912,16 @@ fn installed_fonts_shape() {
                         script,
                         language: Language::from_bcp47(language),
                         features: &[],
+                        direction,
                     };
                     let (glyphs, limits) = shape_with_limits(&font, sample, &options);
                     runs += 1;
-                    let place = || format!("{}:{index} {sample:?} {language}", path.display());
+                    let place = || {
+                        format!(
+                            "{}:{index} {sample:?} {language} {direction:?}",
+                            path.display()
+                        )
+                    };
                     if limits.exhausted() {
                         failures.push(format!("{}: step budget exhausted", place()));
                     }
@@ -1457,8 +1931,10 @@ fn installed_fonts_shape() {
                     if let Some(g) = glyphs.iter().find(|g| g.glyph.0 >= font.glyph_count()) {
                         failures.push(format!("{}: glyph {} out of range", place(), g.glyph.0));
                     }
-                    if glyphs.windows(2).any(|w| w[0].cluster > w[1].cluster)
-                        || glyphs.iter().any(|g| !bounds.contains(&g.cluster))
+                    let rtl = direction == Direction::RightToLeft;
+                    if glyphs.windows(2).any(|w| {
+                        (w[0].cluster > w[1].cluster) != rtl && w[0].cluster != w[1].cluster
+                    }) || glyphs.iter().any(|g| !bounds.contains(&g.cluster))
                     {
                         failures.push(format!("{}: clusters {:?}", place(), clusters(&glyphs)));
                     }
@@ -1510,16 +1986,19 @@ fn dump_shaping_for_comparison() {
         texts.extend(COMPARISON);
     }
     texts.extend(random.iter().map(String::as_str));
-    let configs: [(&str, &str); 9] = [
-        ("en", ""),
-        ("tr", ""),
-        ("ja", ""),
-        ("sr", ""),
-        ("ro", "smcp"),
-        ("en", "-liga,-kern"),
-        ("en", "onum,tnum,frac"),
-        ("de", "salt=2,ss01,c2sc"),
-        ("zh-Hant", "dlig,hlig,case"),
+    let configs: [(&str, &str, Direction); 12] = [
+        ("en", "", Direction::LeftToRight),
+        ("tr", "", Direction::LeftToRight),
+        ("ja", "", Direction::LeftToRight),
+        ("sr", "", Direction::LeftToRight),
+        ("ro", "smcp", Direction::LeftToRight),
+        ("en", "-liga,-kern", Direction::LeftToRight),
+        ("en", "onum,tnum,frac", Direction::LeftToRight),
+        ("de", "salt=2,ss01,c2sc", Direction::LeftToRight),
+        ("zh-Hant", "dlig,hlig,case", Direction::LeftToRight),
+        ("he", "", Direction::RightToLeft),
+        ("en", "frac", Direction::RightToLeft),
+        ("en", "-kern", Direction::RightToLeft),
     ];
     let mut files = Vec::new();
     for dir in font_dirs() {
@@ -1555,7 +2034,7 @@ fn dump_shaping_for_comparison() {
                     .chars()
                     .map(|c| format!("{:X}", u32::from(c)))
                     .collect();
-                for (language, settings) in configs {
+                for (language, settings, direction) in configs {
                     let features: Vec<Feature> = settings
                         .split(',')
                         .filter(|s| !s.is_empty())
@@ -1575,6 +2054,7 @@ fn dump_shaping_for_comparison() {
                         script,
                         language: Language::from_bcp47(language),
                         features: &features,
+                        direction,
                     };
                     let cells: Vec<String> = shape(&font, text, &options)
                         .iter()
@@ -1592,9 +2072,14 @@ fn dump_shaping_for_comparison() {
                         .collect();
                     let _ = writeln!(
                         out,
-                        "{}\t{index}\t{}\t{language}\t{settings}\t{}\t{}\t{}",
+                        "{}\t{index}\t{}\t{language}\t{settings}\t{}\t{}\t{}\t{}",
                         path.display(),
                         script.iso15924(),
+                        if direction == Direction::RightToLeft {
+                            "rtl"
+                        } else {
+                            "ltr"
+                        },
                         hex.join(" "),
                         cells.join(","),
                         bounds.join(" ")
@@ -1659,7 +2144,7 @@ fn random_texts(count: usize) -> Vec<String> {
         .collect()
 }
 
-const COMPARISON: [&str; 21] = [
+const COMPARISON: [&str; 26] = [
     "fi fl ffi ffl fj Th st ct",
     "Tr Ty Yo Wa LT AV To P. F, V.",
     "İstanbul’da “tırnak” — ½ 1/2 3×4",
@@ -1685,4 +2170,11 @@ const COMPARISON: [&str; 21] = [
     "1\u{2044}2 12\u{2044}345 \u{2044}7 8\u{2044} 1\u{2044}2\u{2044}3 １\u{2044}２",
     // Jamo just outside the ranges that form syllables.
     "\u{A97D}\u{1161}\u{302E} \u{1100}\u{D7C7}\u{11A8} \u{A97C}\u{1161}",
+    // Right-to-left and mixed text: Hebrew points in every order, presentation forms,
+    // mirrored brackets, Hebrew digits runs and Latin, Arabic-script and Syriac letters.
+    "\u{5D1}\u{5BC}\u{5B8} \u{5E9}\u{5C1}\u{5BC} \u{5D9}\u{5B4} \u{5D5}\u{5B9} \u{5D0}\u{5B7}\u{5B0}\u{5BD}\u{591} \u{FB2A}\u{5BC}",
+    "\u{5D0}\u{5B8}\u{5B4}\u{5C5} \u{5E4}\u{5BF} \u{5D3}\u{5BC}\u{5B0}\u{5BD} \u{5F2}\u{5B7} <{[(\u{5D0})]}> \u{2264}\u{226E}",
+    "123\u{2044}456 \u{1F1F9}\u{1F1F7} 7,5%",
+    "Hello, \u{5E2}\u{5D5}\u{5DC}\u{5DD}! (\u{2018}x\u{2019}) \u{2039}y\u{203A}",
+    "\u{627}\u{644}\u{639}\u{631}\u{628}\u{64A}\u{629} \u{710}\u{712}\u{730} \u{7C0}\u{7CA}\u{7EB}",
 ];

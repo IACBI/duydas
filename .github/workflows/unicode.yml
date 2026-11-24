@@ -1,0 +1,45 @@
+name: Unicode
+
+# Regenerates the Unicode tables from the UCD and runs the full bidirectional conformance
+# tests. It downloads from unicode.org, so it is kept out of the required CI checks
+# (ADR 0025): it runs weekly, by hand, and on pull requests that touch the generated files.
+on:
+  pull_request:
+    paths:
+      - xtask/src/unicode.rs
+      - crates/duydas-text/src/tables.rs
+      - crates/duydas-text/src/shaping_tables.rs
+      - crates/duydas-text/src/bidi_tables.rs
+      - crates/duydas-text/src/bidi.rs
+      - crates/duydas-text/tests/bidi.rs
+      - crates/duydas-text/tests/data/**
+      - .github/workflows/unicode.yml
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unicode-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  conformance:
+    name: tables · bidi conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo xtask unicode-gen --check
+      - run: cargo test -p duydas-text --test bidi --locked -- --ignored

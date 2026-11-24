@@ -369,6 +369,9 @@ pub(crate) struct Plan {
     pub(crate) gpos: Lookups,
     /// GPOS has a `kern` feature for this script and language, and the plan keeps it.
     pub(crate) gpos_kern: bool,
+    /// The GPOS script whose language systems the plan uses: one of the requested scripts,
+    /// or `DFLT`, `dflt` or `latn`; none if GPOS has none of them.
+    pub(crate) gpos_script: Option<[u8; 4]>,
     /// The mask every glyph starts with: the global bit and each global feature's value.
     pub(crate) global_mask: u32,
     features: Vec<Mapped>,
@@ -760,6 +763,9 @@ fn build_plan(
         gsub: gsub_lookups,
         gpos: gpos_lookups,
         gpos_kern,
+        gpos_script: gpos
+            .and_then(|t| chosen_script(t, scripts))
+            .map(|(tag, _)| tag),
         global_mask,
         features: mapped.into_iter().map(|(f, _, _, _)| f).collect(),
     }
@@ -843,14 +849,7 @@ pub(crate) type Languages = [Option<[u8; 4]>; 2];
 /// The language system for `scripts` (then `DFLT`, `dflt` and `latn`) and the first of
 /// `language` the script has (or the script's default).
 fn lang_sys(t: &[u8], scripts: &[[u8; 4]], language: Languages) -> Option<usize> {
-    if u16_at(t, 0)? != 1 {
-        return None;
-    }
-    let script_list = usize::from(u16_at(t, 4)?);
-    let script = scripts
-        .iter()
-        .chain(&[*b"DFLT", *b"dflt", *b"latn"])
-        .find_map(|&tag| tagged(t, script_list, script_list, tag))?;
+    let (_, script) = chosen_script(t, scripts)?;
     language
         .iter()
         .flatten()
@@ -859,6 +858,19 @@ fn lang_sys(t: &[u8], scripts: &[[u8; 4]], language: Languages) -> Option<usize>
             0 => None,
             offset => Some(script + usize::from(offset)),
         })
+}
+
+/// The first of `scripts`, then `DFLT`, `dflt` and `latn`, that the table has, with its
+/// Script table.
+fn chosen_script(t: &[u8], scripts: &[[u8; 4]]) -> Option<([u8; 4], usize)> {
+    if u16_at(t, 0)? != 1 {
+        return None;
+    }
+    let script_list = usize::from(u16_at(t, 4)?);
+    scripts
+        .iter()
+        .chain(&[*b"DFLT", *b"dflt", *b"latn"])
+        .find_map(|&tag| Some((tag, tagged(t, script_list, script_list, tag)?)))
 }
 
 /// The table at the offset of the record tagged `tag` in a list of (tag, Offset16) records
@@ -1223,19 +1235,22 @@ pub(crate) fn substitute(
         attached: false,
         last_base: None,
         last_base_until: 0,
+        backward: false,
     }
     .run_all(lookups);
     *info = buffer.into_vec();
 }
 
-/// Applies the GPOS lookups, adjusting `pos` (one entry per glyph of `info`). Returns
-/// whether a glyph was attached to another, so attachments need resolving.
+/// Applies the GPOS lookups, adjusting `pos` (one entry per glyph of `info`); `backward`
+/// says `info` is right-to-left text in logical order. Returns whether a glyph was attached
+/// to another, so attachments need resolving.
 pub(crate) fn position(
     tables: &Tables<'_>,
     lookups: &Lookups,
     info: &mut Vec<GlyphInfo>,
     pos: &mut Vec<Position>,
     limits: &mut Limits,
+    backward: bool,
 ) -> bool {
     let Some(t) = tables.gpos else {
         return false;
@@ -1260,6 +1275,7 @@ pub(crate) fn position(
         attached: false,
         last_base: None,
         last_base_until: 0,
+        backward,
     };
     apply.run_all(lookups);
     let attached = apply.attached;
@@ -1295,6 +1311,9 @@ struct Apply<'a, 'b> {
     /// in between.
     last_base: Option<usize>,
     last_base_until: usize,
+    /// The buffer holds right-to-left text in logical order, which cursive attachment
+    /// joins the other way.
+    backward: bool,
 }
 
 impl<'a> Apply<'a, '_> {

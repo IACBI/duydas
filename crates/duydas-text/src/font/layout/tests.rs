@@ -330,6 +330,21 @@ pub(crate) fn pair(pairs: &[(u16, u16, i16)]) -> T {
     T(fields)
 }
 
+/// A cursive attachment subtable (lookup type 3): each glyph with its entry and exit anchors.
+pub(crate) fn cursive(glyphs: &[EntryExit]) -> T {
+    let mut sorted = glyphs.to_vec();
+    sorted.sort_unstable_by_key(|g| g.0);
+    let covered: Vec<u16> = sorted.iter().map(|g| g.0).collect();
+    let mut fields = vec![W(1), O(coverage(&covered)), W(sorted.len() as u16)];
+    for (_, entry, exit) in sorted {
+        fields.extend(anchors(&[entry, exit]));
+    }
+    T(fields)
+}
+
+/// A glyph with its cursive entry and exit anchors.
+pub(crate) type EntryExit = (u16, Option<(i16, i16)>, Option<(i16, i16)>);
+
 fn mark_array(marks: &[(u16, u16, (i16, i16))]) -> T {
     let mut fields = vec![W(marks.len() as u16)];
     for &(_, class, (x, y)) in marks {
@@ -471,8 +486,8 @@ fn gpos(
         .map(|&a| Position::with_advance(a))
         .collect();
     let mut limits = Limits::new(info.len());
-    position(&tables, &lookups, info, &mut pos, &mut limits);
-    propagate_attachments(&mut pos);
+    position(&tables, &lookups, info, &mut pos, &mut limits, false);
+    propagate_attachments(&mut pos, false);
     pos.iter()
         .map(|p| (p.x_advance, p.x_offset, p.y_offset))
         .collect()

@@ -59,5 +59,5 @@ These are the ranges over six runs. An earlier run on the same machine measured 
   - sentence boundaries;
   - the rest of CSS `line-break: loose`: breaks before iteration marks, inseparable characters, centered punctuation and suffixes;
   - bidirectional text (UAX #9), which layout needs for Arabic and Hebrew messages and which comes with it.
-- **Not run in CI:** `unicode-gen --check`, because it downloads from unicode.org. The committed tables are reviewed as code, and the conformance tests run on every push.
+- **Not in the required checks:** `unicode-gen --check`, because it downloads from unicode.org. The committed tables are reviewed as code, and the conformance tests run on every push. Since ADR 0028 a separate `Unicode` workflow runs it weekly and on pull requests that touch the tables.
 - **Next in step 4:** OpenType parsing, glyph rasterization, font fallback and shaping, then paragraph layout. Each part gets its own ADR.

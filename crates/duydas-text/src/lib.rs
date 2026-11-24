@@ -15,7 +15,13 @@
 //!
 //! Shaping (ADR 0027): [`shaping`] turns text into positioned glyphs with a font's OpenType
 //! layout tables, and picks a font from a fallback list for each grapheme cluster.
+//!
+//! Bidirectional text (ADR 0028): [`bidi`] resolves embedding levels and display order with
+//! the Unicode Bidirectional Algorithm (UAX #9).
 
+pub mod bidi;
+#[rustfmt::skip]
+mod bidi_tables;
 pub mod font;
 mod grapheme;
 mod line;

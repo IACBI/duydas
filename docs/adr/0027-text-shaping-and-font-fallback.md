@@ -1,6 +1,6 @@
 # 0027. In-house text shaping and font fallback
 
-- Status: Accepted
+- Status: Accepted; right-to-left text, bidirectional text and HarfBuzz's modified combining classes added by ADR 0028
 - Date: 2026-11-24
 
 ## Context

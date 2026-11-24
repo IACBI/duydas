@@ -3,8 +3,10 @@
 //! font has its parts, marks are put in canonical order, and a base and mark the font has a
 //! precomposed glyph for are composed again.
 
+use crate::bidi;
 use crate::font::Font;
 use crate::font::layout::{LJMO, TJMO, VJMO};
+use crate::props::props;
 use crate::shaping_tables::{COMPOSITIONS, DECOMPOSITIONS, MARK, char_info};
 
 /// A character and the glyph it maps to.
@@ -25,6 +27,50 @@ pub(super) struct Char {
     /// As in HarfBuzz, this is decided once marks are reordered and before they compose
     /// again.
     pub(super) passable_joiner: bool,
+    /// Comes from a character of right-to-left text replaced by its mirror image (rule L4),
+    /// so the `rtlm` feature does not apply to it.
+    pub(super) mirrored: bool,
+}
+
+/// A character of the text on its way to [`Char`]: the grapheme cluster it belongs to and
+/// what it carries from preprocessing.
+#[derive(Clone, Copy, Debug)]
+struct Source {
+    c: char,
+    cluster: usize,
+    /// The Hangul jamo feature (see [`preprocess_hangul`]).
+    jamo: u8,
+    mirrored: bool,
+}
+
+impl Source {
+    fn new(c: char, cluster: usize) -> Self {
+        Self {
+            c,
+            cluster,
+            jamo: 0,
+            mirrored: false,
+        }
+    }
+}
+
+/// The HarfBuzz shaper whose normalization a run gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Shaper {
+    Default,
+    /// Jamo composition and nothing else (see [`preprocess_hangul`]).
+    Hangul,
+    /// Hebrew presentation forms when nothing else composes and the font has no GPOS mark
+    /// positioning (`gpos_mark`), and the order of meteg among the points that fonts expect.
+    Hebrew {
+        gpos_mark: bool,
+    },
+}
+
+impl Shaper {
+    pub(super) fn of(hangul: bool) -> Self {
+        if hangul { Self::Hangul } else { Self::Default }
+    }
 }
 
 /// More combining marks in a row than this are left in their order, as in HarfBuzz.
@@ -100,32 +146,68 @@ pub(super) fn composition(a: char, b: char) -> Option<char> {
 /// Maps `text` to characters and glyphs. Each character's cluster is the start of its
 /// grapheme cluster.
 ///
-/// Hangul text (`hangul`) is handled as HarfBuzz's Hangul shaper does (see
-/// [`preprocess_hangul`]): jamo compose into a syllable the font has, even when the font
-/// has the jamo too. Other characters the font has are not decomposed or composed.
-pub(super) fn normalize(font: &Font, text: &str, hangul: bool) -> Vec<Char> {
-    let mut chars: Vec<(char, usize, u8)> = Vec::with_capacity(text.len());
+/// Hangul text is handled as HarfBuzz's Hangul shaper does (see [`preprocess_hangul`]):
+/// jamo compose into a syllable the font has, even when the font has the jamo too. Other
+/// characters the font has are not decomposed or composed.
+///
+/// In right-to-left text (`mirror`), a character with a mirror image the font has is
+/// replaced by it first, as HarfBuzz does. With `reverse`, the grapheme clusters are taken
+/// in reverse order (their characters keep theirs), as HarfBuzz does to shape text in its
+/// script's direction.
+pub(super) fn normalize(
+    font: &Font,
+    text: &str,
+    shaper: Shaper,
+    mirror: bool,
+    reverse: bool,
+) -> Vec<Char> {
+    let hangul = shaper == Shaper::Hangul;
+    let mut chars: Vec<Source> = Vec::with_capacity(text.len());
     let mut start = 0;
     for grapheme in crate::graphemes(text) {
-        chars.extend(grapheme.chars().map(|c| (c, start, 0)));
+        chars.extend(grapheme.chars().map(|c| {
+            match bidi::mirror(c).filter(|&m| mirror && font.glyph_index(m).is_some()) {
+                Some(m) => Source {
+                    mirrored: true,
+                    ..Source::new(m, start)
+                },
+                None => Source::new(c, start),
+            }
+        }));
         start += grapheme.len();
+    }
+    if reverse {
+        chars = reverse_graphemes(&chars);
     }
     if hangul {
         chars = preprocess_hangul(font, &chars);
     }
     let mut out = Vec::with_capacity(chars.len());
     let mut rest = &chars[..];
-    while let Some(&(_, cluster, _)) = rest.first() {
-        let len = rest.iter().take_while(|&&(_, c, _)| c == cluster).count();
+    while let Some(cluster) = rest.first().map(|s| s.cluster) {
+        // HarfBuzz decomposes a base with the marks after it together. A grapheme cluster
+        // that starts with a mark (at the start of the text, after a control character, or
+        // after a base once right-to-left text is reversed) goes with the one before it.
+        let run = |at: usize| {
+            rest[at..]
+                .iter()
+                .take_while(|s| s.cluster == rest[at].cluster)
+                .count()
+        };
+        let mut len = run(0);
+        while len < rest.len() && char_info(rest[len].c) & MARK != 0 {
+            len += run(len);
+        }
         let (group, tail) = rest.split_at(len);
         rest = tail;
         let mut mapper = Mapper {
             font,
             cluster,
             jamo: 0,
+            mirrored: false,
             out: &mut out,
         };
-        if !group.iter().any(|&(c, _, _)| is_variation_selector(c)) {
+        if !group.iter().any(|s| is_variation_selector(s.c)) {
             mapper.cluster(group, hangul);
             continue;
         }
@@ -135,18 +217,18 @@ pub(super) fn normalize(font: &Font, text: &str, hangul: bool) -> Vec<Char> {
         while !part.is_empty() {
             let len = 1 + part[1..]
                 .iter()
-                .take_while(|&&(c, _, _)| char_info(c) & MARK != 0)
+                .take_while(|s| char_info(s.c) & MARK != 0)
                 .count();
             let (marks, rest) = part.split_at(len);
             part = rest;
-            if marks.iter().any(|&(c, _, _)| is_variation_selector(c)) {
+            if marks.iter().any(|s| is_variation_selector(s.c)) {
                 mapper.selector_cluster(marks);
             } else {
                 mapper.cluster(marks, hangul);
             }
         }
     }
-    reorder(&mut out);
+    reorder(&mut out, shaper);
     for i in 1..out.len().saturating_sub(1) {
         let (prev, next) = (combining_class(out[i - 1].c), combining_class(out[i + 1].c));
         if out[i].c == '\u{34F}' && (next == 0 || prev <= next) {
@@ -154,8 +236,46 @@ pub(super) fn normalize(font: &Font, text: &str, hangul: bool) -> Vec<Char> {
         }
     }
     if !hangul {
-        recompose(font, &mut out);
+        recompose(font, &mut out, shaper);
     }
+    out
+}
+
+/// Reverses the order of HarfBuzz's grapheme clusters, each keeping its characters in
+/// order. They are not Unicode's: a character continues the one before only if it is a
+/// mark, ZWJ (or Extended_Pictographic after ZWJ), an emoji modifier, the second regional
+/// indicator of a pair, a halfwidth katakana sound mark or a tag. A ZWNJ or a Hangul vowel
+/// jamo starts one of its own.
+fn reverse_graphemes(chars: &[Source]) -> Vec<Source> {
+    let regional = |c: char| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c);
+    let mut continues: Vec<bool> = Vec::with_capacity(chars.len());
+    for (i, s) in chars.iter().enumerate() {
+        let c = s.c;
+        let after = |k: usize| (chars[k].c, continues[k]);
+        let continuation = char_info(c) & MARK != 0
+            || matches!(
+                c,
+                '\u{200D}'
+                    | '\u{1F3FB}'..='\u{1F3FF}'
+                    | '\u{FF9E}'
+                    | '\u{FF9F}'
+                    | '\u{E0020}'..='\u{E007F}'
+            )
+            || i.checked_sub(1).map(after).is_some_and(|(p, p_continues)| {
+                (regional(c) && regional(p) && !p_continues)
+                    || (p == '\u{200D}' && props(c).extended_pictographic())
+            });
+        continues.push(continuation);
+    }
+    let mut out = Vec::with_capacity(chars.len());
+    let mut end = chars.len();
+    for start in (1..chars.len()).rev() {
+        if !continues[start] {
+            out.extend_from_slice(&chars[start..end]);
+            end = start;
+        }
+    }
+    out.extend_from_slice(&chars[..end]);
     out
 }
 
@@ -189,16 +309,17 @@ fn is_combining_t(u: u32) -> bool {
 /// decomposed into jamo the font has, which then take the `ljmo`, `vjmo` and `tjmo`
 /// features. A tone mark after a syllable moves in front of it, unless its glyph has no
 /// width; one with no syllable before it gets a dotted circle, when the font has one.
-fn preprocess_hangul(font: &Font, chars: &[(char, usize, u8)]) -> Vec<(char, usize, u8)> {
+fn preprocess_hangul(font: &Font, chars: &[Source]) -> Vec<Source> {
     let has = |u: u32| char::from_u32(u).filter(|&c| font.glyph_index(c).is_some());
-    let code = |i: usize| chars.get(i).map(|&(c, _, _)| u32::from(c));
+    let code = |i: usize| chars.get(i).map(|s| u32::from(s.c));
     let jamo = [LJMO, VJMO, TJMO];
-    let mut out: Vec<(char, usize, u8)> = Vec::with_capacity(chars.len());
+    let mut out: Vec<Source> = Vec::with_capacity(chars.len());
     // The last syllable put out, `out[start..end]`, when `start < end`.
     let (mut start, mut end) = (0, 0);
     let mut i = 0;
     while i < chars.len() {
-        let (c, cluster, _) = chars[i];
+        let source = chars[i];
+        let (c, cluster) = (source.c, source.cluster);
         let u = u32::from(c);
         if (0x302E..=0x302F).contains(&u) {
             let zero_width = font
@@ -206,15 +327,19 @@ fn preprocess_hangul(font: &Font, chars: &[(char, usize, u8)]) -> Vec<(char, usi
                 .is_some_and(|g| font.advance(g) == Some(0));
             if start < end && end == out.len() {
                 if zero_width {
-                    out.push((c, cluster, 0));
+                    out.push(source);
                 } else {
-                    out.insert(start, (c, cluster, 0));
+                    out.insert(start, source);
                 }
             } else if let Some(circle) = has(0x25CC) {
-                let pair = if zero_width { [circle, c] } else { [c, circle] };
-                out.extend(pair.map(|c| (c, cluster, 0)));
+                let circle = Source::new(circle, cluster);
+                out.extend(if zero_width {
+                    [circle, source]
+                } else {
+                    [source, circle]
+                });
             } else {
-                out.push((c, cluster, 0));
+                out.push(source);
             }
             i += 1;
             (start, end) = (out.len(), out.len());
@@ -233,12 +358,14 @@ fn preprocess_hangul(font: &Font, chars: &[(char, usize, u8)]) -> Vec<(char, usi
                         + (v - V_BASE) * T_COUNT
                         + t.map_or(0, |t| t - T_BASE))
                 {
-                    out.push((s, cluster, 0));
+                    out.push(Source::new(s, cluster));
                     end = start + 1;
                 } else {
                     for k in 0..len {
-                        let (c, cluster, _) = chars[i + k];
-                        out.push((c, cluster, jamo[k]));
+                        out.push(Source {
+                            jamo: jamo[k],
+                            ..chars[i + k]
+                        });
                     }
                     end = start + len;
                 }
@@ -254,7 +381,7 @@ fn preprocess_hangul(font: &Font, chars: &[(char, usize, u8)]) -> Vec<(char, usi
                     .filter(|&n| is_combining_t(n))
                     .and_then(|n| has(u + n - T_BASE))
             {
-                out.push((s, cluster, 0));
+                out.push(Source::new(s, cluster));
                 end = start + 1;
                 i += 2;
                 continue;
@@ -265,13 +392,18 @@ fn preprocess_hangul(font: &Font, chars: &[(char, usize, u8)]) -> Vec<(char, usi
                 let len = if t == 0 { 2 } else { 3 };
                 let found: Option<Vec<char>> = parts[..len].iter().map(|&p| has(p)).collect();
                 if let Some(found) = found {
-                    out.extend(found.iter().zip(jamo).map(|(&c, j)| (c, cluster, j)));
+                    out.extend(found.iter().zip(jamo).map(|(&c, jamo)| Source {
+                        jamo,
+                        ..Source::new(c, cluster)
+                    }));
                     i += 1;
                     end = start + len;
                     // An LV decomposed for the trailing jamo after it takes that jamo in.
                     if has_glyph {
-                        let (c, cluster, _) = chars[i];
-                        out.push((c, cluster, TJMO));
+                        out.push(Source {
+                            jamo: TJMO,
+                            ..chars[i]
+                        });
                         i += 1;
                         end += 1;
                     }
@@ -282,7 +414,7 @@ fn preprocess_hangul(font: &Font, chars: &[(char, usize, u8)]) -> Vec<(char, usi
                 end = start + 1;
             }
         }
-        out.push((c, cluster, 0));
+        out.push(source);
         i += 1;
     }
     out
@@ -293,6 +425,8 @@ struct Mapper<'a> {
     cluster: usize,
     /// The jamo feature of the character being mapped.
     jamo: u8,
+    /// Whether the character being mapped is a mirror image.
+    mirrored: bool,
     out: &'a mut Vec<Char>,
 }
 
@@ -301,43 +435,60 @@ impl Mapper<'_> {
         self.font.glyph_index(c).map(|g| g.0)
     }
 
-    /// A cluster with a variation selector is not normalized: a base whose variant the font
-    /// lists takes that glyph and drops the selector; otherwise both keep their own glyphs.
     /// Maps characters of one grapheme cluster. One with marks is decomposed as far as the
     /// font allows, so its marks can be reordered and composed again; others keep the
     /// characters the font has.
-    fn cluster(&mut self, group: &[(char, usize, u8)], hangul: bool) {
+    fn cluster(&mut self, group: &[Source], hangul: bool) {
         let shortest = hangul
             || !group
                 .iter()
-                .any(|&(c, _, _)| char_info(c) & MARK != 0 || combining_class(c) != 0);
-        for &(c, _, jamo) in group {
-            self.jamo = jamo;
-            self.current(c, shortest);
+                .any(|s| char_info(s.c) & MARK != 0 || combining_class(s.c) != 0);
+        for s in group {
+            self.cluster = s.cluster;
+            self.jamo = s.jamo;
+            self.mirrored = s.mirrored;
+            self.current(s.c, shortest);
         }
     }
 
-    fn selector_cluster(&mut self, group: &[(char, usize, u8)]) {
+    /// A cluster with a variation selector is not normalized: a base whose variant the font
+    /// lists takes that glyph and drops the selector; otherwise both keep their own glyphs.
+    fn selector_cluster(&mut self, group: &[Source]) {
         let nominal = |m: &Self, c: char| m.glyph(c).unwrap_or(0);
         let mut i = 0;
         while i < group.len() {
-            let (c, _, jamo) = group[i];
+            let Source {
+                c,
+                jamo,
+                mirrored,
+                cluster,
+            } = group[i];
+            self.cluster = cluster;
             self.jamo = jamo;
+            self.mirrored = mirrored;
             i += 1;
-            let Some(&(selector, _, _)) =
-                group.get(i).filter(|&&(s, _, _)| is_variation_selector(s))
+            let Some(selector) = group
+                .get(i)
+                .map(|s| s.c)
+                .filter(|&s| is_variation_selector(s))
             else {
                 let glyph = nominal(self, c);
                 self.push(c, glyph, 0);
                 continue;
             };
+            let selector_cluster = group[i].cluster;
             i += 1;
             match self.font.glyph_variant(c, selector) {
-                Some(glyph) => self.push(c, glyph.0, 0),
+                Some(glyph) => {
+                    // HarfBuzz replaces the pair, merging their clusters.
+                    self.cluster = cluster.min(selector_cluster);
+                    self.push(c, glyph.0, 0);
+                }
                 None => {
                     let glyph = nominal(self, c);
                     self.push(c, glyph, 0);
                     self.jamo = 0;
+                    self.cluster = selector_cluster;
                     let glyph = nominal(self, selector);
                     self.push(selector, glyph, 0);
                     if let Some(last) = self.out.last_mut() {
@@ -346,9 +497,12 @@ impl Mapper<'_> {
                 }
             }
             self.jamo = 0;
-            while let Some(&(more, _, _)) =
-                group.get(i).filter(|&&(s, _, _)| is_variation_selector(s))
+            self.mirrored = false;
+            while let Some(&Source {
+                c: more, cluster, ..
+            }) = group.get(i).filter(|s| is_variation_selector(s.c))
             {
+                self.cluster = cluster;
                 let glyph = nominal(self, more);
                 self.push(more, glyph, 0);
                 i += 1;
@@ -365,6 +519,7 @@ impl Mapper<'_> {
             unmatched_selector: false,
             jamo: self.jamo,
             passable_joiner: false,
+            mirrored: self.mirrored,
         });
     }
 
@@ -425,7 +580,7 @@ impl Mapper<'_> {
 }
 
 /// Sorts each run of combining marks by combining class, keeping equal classes in order.
-fn reorder(chars: &mut [Char]) {
+fn reorder(chars: &mut [Char], shaper: Shaper) {
     let mut i = 0;
     while i < chars.len() {
         if combining_class(chars[i].c) == 0 {
@@ -437,27 +592,126 @@ fn reorder(chars: &mut [Char]) {
             .position(|ch| combining_class(ch.c) == 0)
             .map_or(chars.len(), |n| i + n);
         if end - i <= MAX_COMBINING_MARKS {
-            chars[i..end].sort_by_key(|ch| combining_class(ch.c));
+            // HarfBuzz's insertion sort, which merges the clusters of the marks it moves past.
+            for k in i + 1..end {
+                let class = combining_class(chars[k].c);
+                let mut j = k;
+                while j > i && combining_class(chars[j - 1].c) > class {
+                    j -= 1;
+                }
+                if j < k {
+                    merge_clusters(chars, j, k + 1);
+                    chars[j..=k].rotate_right(1);
+                }
+            }
+            if let Shaper::Hebrew { .. } = shaper {
+                reorder_hebrew(&mut chars[i..end]);
+            }
         }
         i = end;
     }
 }
 
+/// HarfBuzz's `merge_clusters`: the characters from `start` to `end` take the smallest of
+/// their clusters, and so do the characters next to them that share the cluster of the
+/// first or last. Moving marks across a cluster boundary (a mark that starts a grapheme
+/// cluster, as at the start of the text or after a control character) merges the clusters.
+fn merge_clusters(chars: &mut [Char], mut start: usize, mut end: usize) {
+    let Some(cluster) = chars[start..end].iter().map(|ch| ch.cluster).min() else {
+        return;
+    };
+    if cluster != chars[end - 1].cluster {
+        while end < chars.len() && chars[end - 1].cluster == chars[end].cluster {
+            end += 1;
+        }
+    }
+    if cluster != chars[start].cluster {
+        while start > 0 && chars[start - 1].cluster == chars[start].cluster {
+            start -= 1;
+        }
+    }
+    for ch in &mut chars[start..end] {
+        ch.cluster = cluster;
+    }
+}
+
+/// HarfBuzz's Hebrew mark order: in patah or qamats, then sheva or hiriq, then meteg or a
+/// mark below, the last two swap, the order fonts expect. Only the first such triple in a
+/// run of marks moves. The classes are HarfBuzz's (see `char_info`).
+fn reorder_hebrew(marks: &mut [Char]) {
+    const PATAH: u8 = 20;
+    const QAMATS: u8 = 21;
+    const SHEVA: u8 = 22;
+    const HIRIQ: u8 = 23;
+    const METEG: u8 = 25;
+    const BELOW: u8 = 220;
+    for i in 2..marks.len() {
+        let class = |k: usize| combining_class(marks[k].c);
+        if matches!(class(i - 2), PATAH | QAMATS)
+            && matches!(class(i - 1), SHEVA | HIRIQ)
+            && matches!(class(i), METEG | BELOW)
+        {
+            // Both are in the cluster of the base before them, so their clusters agree.
+            marks.swap(i - 1, i);
+            break;
+        }
+    }
+}
+
+/// The Hebrew presentation form of a letter and a point, which HarfBuzz composes for old
+/// fonts that have the forms but do not position marks: these compositions are excluded
+/// from Unicode normalization.
+fn hebrew_presentation_form(a: char, b: char) -> Option<char> {
+    // The letters alef to tav with dagesh; 0 where none is encoded.
+    const DAGESH: [u32; 27] = [
+        0xFB30, 0xFB31, 0xFB32, 0xFB33, 0xFB34, 0xFB35, 0xFB36, 0, 0xFB38, 0xFB39, 0xFB3A, 0xFB3B,
+        0xFB3C, 0, 0xFB3E, 0, 0xFB40, 0xFB41, 0, 0xFB43, 0xFB44, 0, 0xFB46, 0xFB47, 0xFB48, 0xFB49,
+        0xFB4A,
+    ];
+    let form = match (u32::from(b), u32::from(a)) {
+        (0x05B4, 0x05D9) => 0xFB1D,
+        (0x05B7, 0x05F2) => 0xFB1F,
+        (0x05B7, 0x05D0) => 0xFB2E,
+        (0x05B8, 0x05D0) => 0xFB2F,
+        (0x05B9, 0x05D5) => 0xFB4B,
+        (0x05BC, a @ 0x05D0..=0x05EA) => DAGESH[(a - 0x05D0) as usize],
+        (0x05BC, 0xFB2A) => 0xFB2C,
+        (0x05BC, 0xFB2B) => 0xFB2D,
+        (0x05BF, 0x05D1) => 0xFB4C,
+        (0x05BF, 0x05DB) => 0xFB4D,
+        (0x05BF, 0x05E4) => 0xFB4E,
+        (0x05C1, 0x05E9) => 0xFB2A,
+        (0x05C1, 0xFB49) => 0xFB2C,
+        (0x05C2, 0x05E9) => 0xFB2B,
+        (0x05C2, 0xFB49) => 0xFB2D,
+        _ => 0,
+    };
+    char::from_u32(form).filter(|&c| c != '\0')
+}
+
 /// Composes marks with their starter where the font has the composite, unless a mark of
 /// the same or a higher class comes between them.
-fn recompose(font: &Font, chars: &mut Vec<Char>) {
+fn recompose(font: &Font, chars: &mut Vec<Char>, shaper: Shaper) {
+    let compose = |a: char, b: char| {
+        composition(a, b).or_else(|| match shaper {
+            Shaper::Hebrew { gpos_mark: false } => hebrew_presentation_form(a, b),
+            _ => None,
+        })
+    };
     if chars.len() < 2 {
         return;
     }
     let mut out: Vec<Char> = Vec::with_capacity(chars.len());
     let mut starter = 0;
-    for &ch in chars.iter() {
+    for k in 0..chars.len() {
+        let ch = chars[k];
         if let Some(last) = out.last()
             && char_info(ch.c) & MARK != 0
             && (starter == out.len() - 1 || combining_class(last.c) < combining_class(ch.c))
-            && let Some(composed) = composition(out[starter].c, ch.c)
+            && let Some(composed) = compose(out[starter].c, ch.c)
             && let Some(glyph) = font.glyph_index(composed)
         {
+            merge_composed(&mut out, starter, ch.cluster, &mut chars[k + 1..]);
             let base = &mut out[starter];
             base.c = composed;
             base.glyph = glyph.0;
@@ -470,4 +724,29 @@ fn recompose(font: &Font, chars: &mut Vec<Char>) {
         }
     }
     *chars = out;
+}
+
+/// HarfBuzz's `merge_out_clusters` when a mark of cluster `mark` composes with the starter
+/// at `starter`: the characters from the starter on take the smallest of their clusters and
+/// the mark's, as do those before them in the starter's cluster and those after the mark
+/// (`rest`) in its cluster. Nothing changes when they are all in one cluster, as they are
+/// unless the mark starts a grapheme cluster.
+fn merge_composed(out: &mut [Char], starter: usize, mark: usize, rest: &mut [Char]) {
+    let cluster = out[starter..]
+        .iter()
+        .map(|ch| ch.cluster)
+        .fold(mark, usize::min);
+    if cluster == mark && out[starter..].iter().all(|ch| ch.cluster == mark) {
+        return;
+    }
+    let mut start = starter;
+    while start > 0 && out[start - 1].cluster == out[start].cluster {
+        start -= 1;
+    }
+    for ch in rest.iter_mut().take_while(|ch| ch.cluster == mark) {
+        ch.cluster = cluster;
+    }
+    for ch in &mut out[start..] {
+        ch.cluster = cluster;
+    }
 }

@@ -7,7 +7,8 @@ use crate::shaping_tables::{
     DEFAULT_IGNORABLE, SCRIPT_CODES, SCRIPT_COMMON, SCRIPT_INHERITED, SCRIPT_UNKNOWN, char_info,
 };
 
-use super::normalize::{decomposition, is_variation_selector, normalize, space_kind};
+use super::normalize::{Shaper, decomposition, is_variation_selector, normalize, space_kind};
+use crate::bidi::Direction;
 
 /// A Unicode script (the Script property, UAX #24).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,6 +49,24 @@ impl Script {
     }
 
     /// Whether this is a real script rather than Common, Inherited or Unknown.
+    /// The direction the script is written in horizontally, as HarfBuzz 10.4.0 lists it:
+    /// right to left for Arabic, Hebrew, Syriac, Thaana, N'Ko, Adlam and the other
+    /// right-to-left scripts, none for those written either way (Old Hungarian, Old Italic,
+    /// Runic, Tifinagh), and left to right for the rest, Common and Inherited included.
+    pub fn horizontal_direction(self) -> Option<Direction> {
+        const RIGHT_TO_LEFT: &[&str] = &[
+            "Arab", "Hebr", "Syrc", "Thaa", "Cprt", "Khar", "Phnx", "Nkoo", "Lydi", "Avst", "Armi",
+            "Phli", "Prti", "Sarb", "Orkh", "Samr", "Mand", "Merc", "Mero", "Mani", "Mend", "Nbat",
+            "Narb", "Palm", "Phlp", "Hatr", "Adlm", "Rohg", "Sogo", "Sogd", "Elym", "Chrs", "Yezi",
+            "Ougr", "Gara",
+        ];
+        match self.iso15924() {
+            code if RIGHT_TO_LEFT.contains(&code) => Some(Direction::RightToLeft),
+            "Hung" | "Ital" | "Runr" | "Tfng" => None,
+            _ => Some(Direction::LeftToRight),
+        }
+    }
+
     pub fn is_specific(self) -> bool {
         !matches!(self.0, SCRIPT_COMMON | SCRIPT_INHERITED | SCRIPT_UNKNOWN)
     }
@@ -337,7 +356,7 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
 /// text) into a glyph the font has.
 fn covers(font: &Font, grapheme: &str, hangul: bool) -> bool {
     let mapped = || {
-        normalize(font, grapheme, hangul)
+        normalize(font, grapheme, Shaper::of(hangul), false, false)
             .iter()
             .all(|ch| ch.glyph != 0 || char_info(ch.c) & DEFAULT_IGNORABLE != 0)
     };

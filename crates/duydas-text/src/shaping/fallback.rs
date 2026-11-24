@@ -3,13 +3,16 @@
 //! glyphs' boxes as HarfBuzz reads them (a TrueType glyph's header box), and marks of the same
 //! class stack. The arithmetic wraps at 32 bits, as
 //! HarfBuzz's does, so hostile metrics cannot overflow it.
+//!
+//! Combining classes here are HarfBuzz's modified ones (see `char_info`), which
+//! [`recategorize`] turns into placements first.
 
 use std::collections::HashMap;
 
 use crate::font::layout::{GlyphInfo, Limits, Position};
 use crate::font::{Font, GlyphId};
 
-/// Canonical combining classes that place marks.
+/// Combining classes that place marks.
 const ATTACHED_BELOW_LEFT: u8 = 200;
 const ATTACHED_BELOW: u8 = 202;
 const ATTACHED_ABOVE: u8 = 214;
@@ -22,6 +25,57 @@ const ABOVE: u8 = 230;
 const ABOVE_RIGHT: u8 = 232;
 const DOUBLE_BELOW: u8 = 233;
 const DOUBLE_ABOVE: u8 = 234;
+
+/// The placement of a nonspacing mark `c` with combining class `class` (HarfBuzz's
+/// modified class), as HarfBuzz's fallback reads it: Hebrew, Arabic, Syriac, Thai, Lao and
+/// Tibetan points, whose classes say only in what order they combine, go above, below or
+/// beside their base; Thai and Lao marks without a class get one.
+pub(super) fn recategorize(c: char, class: u8) -> u8 {
+    if class >= 200 {
+        return class;
+    }
+    let mut class = class;
+    if u32::from(c) & !0xFF == 0x0E00 {
+        class = match (class, c) {
+            (0, '\u{E31}' | '\u{E34}'..='\u{E37}' | '\u{E47}' | '\u{E4C}'..='\u{E4E}') => {
+                ABOVE_RIGHT
+            }
+            (0, '\u{EB1}' | '\u{EB4}'..='\u{EB7}' | '\u{EBB}' | '\u{ECC}' | '\u{ECD}') => ABOVE,
+            (0, '\u{EBC}') => BELOW,
+            // Thai virama.
+            (1.., '\u{E3A}') => BELOW_RIGHT,
+            _ => class,
+        };
+    }
+    match class {
+        // Hebrew: hataf segol, hataf patah, hataf qamats, tsere, segol, patah, qamats,
+        // sheva, hiriq, qubuts and meteg (classes 15 to 25 in HarfBuzz's numbering).
+        15..=25 => BELOW,
+        // Rafe.
+        13 => ATTACHED_ABOVE,
+        // Shin dot.
+        10 => ABOVE_RIGHT,
+        // Sin dot, holam.
+        11 | 14 => ABOVE_LEFT,
+        // Point varika.
+        26 => ABOVE,
+        // Arabic and Syriac: fathatan, dammatan, fatha, damma, shadda, sukun, superscript
+        // alef and alaph above; kasratan and kasra below.
+        28 | 29 | 31 | 32 | 27 | 34 | 35 | 36 => ABOVE,
+        30 | 33 => BELOW,
+        // Thai sara u and uu, mai.
+        3 => BELOW_RIGHT,
+        107 => ABOVE_RIGHT,
+        // Lao sign u and uu, mai.
+        118 => BELOW,
+        122 => ABOVE,
+        // Tibetan sign aa, sign i, sign u.
+        129 => BELOW,
+        132 => ABOVE,
+        131 => BELOW,
+        _ => class,
+    }
+}
 
 /// A glyph's box as HarfBuzz reports it: left and top edges, width, and height down
 /// (negative).
@@ -63,12 +117,16 @@ fn extents(font: &Font, glyph: u16) -> Option<Extents> {
     }
 }
 
-/// What positioning needs besides the glyphs: the font, each glyph's ink box once, and the
-/// shaping budget, a step of which each mark spends.
+/// What positioning needs besides the glyphs: the font, each glyph's ink box once, the
+/// shaping budget, a step of which each mark spends, and the directions.
 struct Context<'a> {
     font: &'a Font,
     extents: HashMap<u16, Option<Extents>>,
     limits: &'a Limits,
+    /// The run is right to left, which puts a ligature's first component on the right.
+    rtl: bool,
+    /// The glyphs are right-to-left text in logical order.
+    backward: bool,
 }
 
 impl Context<'_> {
@@ -84,12 +142,14 @@ impl Context<'_> {
 }
 
 /// Positions every mark cluster: a base and the marks (by General_Category) after it. When
-/// `limits` runs out, the marks left keep their positions.
+/// `limits` runs out, the marks left keep their positions. `adjust` moves a mark whose
+/// advance is zeroed back over it; `rtl` and `backward` are as in [`Context`].
 pub(super) fn position_marks(
     font: &Font,
     info: &[GlyphInfo],
     pos: &mut [Position],
     adjust: bool,
+    (rtl, backward): (bool, bool),
     limits: &Limits,
 ) {
     // Finding the clusters and their bases visits each glyph once more.
@@ -100,6 +160,8 @@ pub(super) fn position_marks(
         font,
         extents: HashMap::new(),
         limits,
+        rtl,
+        backward,
     };
     let mut start = 0;
     for i in 1..info.len() {
@@ -176,10 +238,16 @@ fn position_around_base(
 
     let lig_id = info[base].lig_id();
     let components = i32::from(info[base].components());
-    let (mut x_offset, mut y_offset) = (
-        pos[base].x_advance.wrapping_neg(),
-        pos[base].y_advance.wrapping_neg(),
-    );
+    // Marks hang back over the advances before them, left to right; right to left the
+    // glyphs come out reversed, so they move forward over the advances after the base.
+    let (mut x_offset, mut y_offset) = if cx.backward {
+        (0, 0)
+    } else {
+        (
+            pos[base].x_advance.wrapping_neg(),
+            pos[base].y_advance.wrapping_neg(),
+        )
+    };
     let mut component_extents = base_extents;
     let mut last_component = -1;
     let mut last_class: Option<u8> = None;
@@ -187,8 +255,13 @@ fn position_around_base(
     for i in base + 1..end {
         let class = info[i].combining_class;
         if class == 0 {
-            x_offset = x_offset.wrapping_sub(pos[i].x_advance);
-            y_offset = y_offset.wrapping_sub(pos[i].y_advance);
+            if cx.backward {
+                x_offset = x_offset.wrapping_add(pos[i].x_advance);
+                y_offset = y_offset.wrapping_add(pos[i].y_advance);
+            } else {
+                x_offset = x_offset.wrapping_sub(pos[i].x_advance);
+                y_offset = y_offset.wrapping_sub(pos[i].y_advance);
+            }
             continue;
         }
         if components > 1 {
@@ -201,7 +274,12 @@ fn position_around_base(
                 last_component = component;
                 last_class = None;
                 component_extents = base_extents;
-                let share = component
+                let order = if cx.rtl {
+                    components - 1 - component
+                } else {
+                    component
+                };
+                let share = order
                     .wrapping_mul(component_extents.width)
                     .wrapping_div(components);
                 component_extents.x_bearing = component_extents.x_bearing.wrapping_add(share);
@@ -213,7 +291,14 @@ fn position_around_base(
             cluster_extents = component_extents;
         }
         let mark = cx.extents(info[i].glyph);
-        position_mark(font, mark, &mut pos[i], &mut cluster_extents, class);
+        position_mark(
+            font,
+            mark,
+            &mut pos[i],
+            &mut cluster_extents,
+            class,
+            cx.backward,
+        );
         let p = &mut pos[i];
         p.x_advance = 0;
         p.y_advance = 0;
@@ -228,6 +313,7 @@ fn position_mark(
     pos: &mut Position,
     base: &mut Extents,
     class: u8,
+    backward: bool,
 ) {
     let Some(mark) = mark else {
         return;
@@ -237,6 +323,12 @@ fn position_mark(
     // Left and right marks are not moved across.
     let right = base.x_bearing.wrapping_add(base.width);
     pos.x_offset = match class {
+        // A double mark straddles the base's end, its right edge left to right, its left
+        // edge right to left.
+        DOUBLE_BELOW | DOUBLE_ABOVE if backward => base
+            .x_bearing
+            .wrapping_sub(mark.width / 2)
+            .wrapping_sub(mark.x_bearing),
         DOUBLE_BELOW | DOUBLE_ABOVE => right
             .wrapping_sub(mark.width / 2)
             .wrapping_sub(mark.x_bearing),

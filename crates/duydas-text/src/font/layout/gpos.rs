@@ -57,9 +57,10 @@ impl Position {
         self.x_advance = self.x_advance.wrapping_add(x_advance);
     }
 
-    /// Hangs the glyph from the one before it, as cross-stream kerning does.
-    pub(super) fn hang_from_previous(&mut self) {
-        self.attach = -1;
+    /// Hangs the glyph from its neighbour `step` (-1 or 1) away, as cross-stream kerning
+    /// does.
+    pub(super) fn hang(&mut self, step: i32) {
+        self.attach = step;
         self.attach_kind = ATTACH_CURSIVE;
     }
 }
@@ -170,8 +171,9 @@ impl Apply<'_, '_> {
         Some(if format2 != 0 { j + 1 } else { j })
     }
 
-    /// Cursive attachment (type 3), for left-to-right text: glyph `i`'s entry joins the
-    /// exit of the glyph before it.
+    /// Cursive attachment (type 3): glyph `j`'s entry joins the exit of the glyph `i`
+    /// before it. Left to right, `i`'s advance ends at its exit and `j` moves back to its
+    /// entry; right to left, the other way round.
     fn cursive(&mut self, lookup: &Lookup, at: usize, j: usize) -> Option<usize> {
         let t = self.t;
         if u16_at(t, at)? != 1 {
@@ -189,10 +191,17 @@ impl Apply<'_, '_> {
         let (exit_x, exit_y) = point(self.info[i].glyph, 2)?;
 
         let pos = &mut *self.pos;
-        pos[i].x_advance = exit_x.wrapping_add(pos[i].x_offset);
-        let d = entry_x.wrapping_add(pos[j].x_offset);
-        pos[j].x_advance = pos[j].x_advance.wrapping_sub(d);
-        pos[j].x_offset = pos[j].x_offset.wrapping_sub(d);
+        if self.backward {
+            let d = exit_x.wrapping_add(pos[i].x_offset);
+            pos[i].x_advance = pos[i].x_advance.wrapping_sub(d);
+            pos[i].x_offset = pos[i].x_offset.wrapping_sub(d);
+            pos[j].x_advance = entry_x.wrapping_add(pos[j].x_offset);
+        } else {
+            pos[i].x_advance = exit_x.wrapping_add(pos[i].x_offset);
+            let d = entry_x.wrapping_add(pos[j].x_offset);
+            pos[j].x_advance = pos[j].x_advance.wrapping_sub(d);
+            pos[j].x_offset = pos[j].x_offset.wrapping_sub(d);
+        }
 
         let (child, parent, y) = if lookup.flags & RIGHT_TO_LEFT != 0 {
             (i, j, entry_y - exit_y)
@@ -427,10 +436,11 @@ fn reverse_cursive_chain(pos: &mut [Position], child: usize, new_parent: usize) 
     chain.len()
 }
 
-/// Resolves attachments into offsets from the pen position, for left-to-right text: a mark
-/// moves with its base and back over the advances between them; a cursive glyph moves
-/// vertically with the glyph it hangs from.
-pub(crate) fn propagate_attachments(pos: &mut [Position]) {
+/// Resolves attachments into offsets from the pen position: a mark moves with its base and
+/// over the advances between them (back over them left to right; `backward`, for
+/// right-to-left text in logical order, forward over those after the base up to and
+/// including its own); a cursive glyph moves vertically with the glyph it hangs from.
+pub(crate) fn propagate_attachments(pos: &mut [Position], backward: bool) {
     // Running sums of the advances, so a mark far from its base costs no more than a near
     // one. Advances do not change from here on.
     let mut sums = Vec::with_capacity(pos.len() + 1);
@@ -442,11 +452,11 @@ pub(crate) fn propagate_attachments(pos: &mut [Position]) {
         sums.push((x, y));
     }
     for i in 0..pos.len() {
-        propagate(pos, &sums, i, MAX_NESTING);
+        propagate(pos, &sums, i, backward, MAX_NESTING);
     }
 }
 
-fn propagate(pos: &mut [Position], sums: &[(i64, i64)], i: usize, depth: u8) {
+fn propagate(pos: &mut [Position], sums: &[(i64, i64)], i: usize, backward: bool, depth: u8) {
     let (chain, kind) = (pos[i].attach, pos[i].attach_kind);
     if chain == 0 {
         return;
@@ -461,7 +471,7 @@ fn propagate(pos: &mut [Position], sums: &[(i64, i64)], i: usize, depth: u8) {
     if depth == 0 {
         return;
     }
-    propagate(pos, sums, j, depth - 1);
+    propagate(pos, sums, j, backward, depth - 1);
     let (x_offset, y_offset) = (pos[j].x_offset, pos[j].y_offset);
     let p = &mut pos[i];
     p.y_offset = p.y_offset.wrapping_add(y_offset);
@@ -469,9 +479,16 @@ fn propagate(pos: &mut [Position], sums: &[(i64, i64)], i: usize, depth: u8) {
         return;
     }
     p.x_offset = p.x_offset.wrapping_add(x_offset);
-    if j < i {
-        // Back over the advances from the base to the mark; truncating the 64-bit sum gives
-        // what subtracting them one by one with 32-bit wrapping would.
+    // Truncating a 64-bit sum of advances gives what adding them one by one with 32-bit
+    // wrapping would.
+    if j < i && backward {
+        p.x_offset = p
+            .x_offset
+            .wrapping_add((sums[i + 1].0 - sums[j + 1].0) as i32);
+        p.y_offset = p
+            .y_offset
+            .wrapping_add((sums[i + 1].1 - sums[j + 1].1) as i32);
+    } else if j < i {
         p.x_offset = p.x_offset.wrapping_sub((sums[i].0 - sums[j].0) as i32);
         p.y_offset = p.y_offset.wrapping_sub((sums[i].1 - sums[j].1) as i32);
     }
