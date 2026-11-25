@@ -83,28 +83,46 @@ impl<'a> Kern<'a> {
     /// and every glyph then hangs from the one before it, so later glyphs rise with it.
     /// Returns whether a cross-stream subtable moved a glyph. Each subtable spends a step of
     /// `limits` per glyph, and kerning stops when they run out.
-    pub(crate) fn apply(&self, info: &[GlyphInfo], pos: &mut [Position], limits: &Limits) -> bool {
+    ///
+    /// Right-to-left text in logical order (`backward`) is kerned in visual order, as
+    /// HarfBuzz does, and its glyphs hang from the next one instead.
+    pub(crate) fn apply(
+        &self,
+        info: &[GlyphInfo],
+        pos: &mut [Position],
+        limits: &Limits,
+        backward: bool,
+    ) -> bool {
+        let n = info.len();
+        let at = |k: usize| if backward { n - 1 - k } else { k };
         let mut chained = false;
         let mut raised = false;
         for subtable in &self.subtables {
-            // A pass over the run, whatever it finds: marks passed over and pairs tried.
-            if !limits.spend(info.len()) {
+            // A pass over the run, whatever it finds: marks passed over and pairs tried; the
+            // first cross-stream subtable hangs every glyph first.
+            let setup = if subtable.cross_stream && !chained {
+                n
+            } else {
+                0
+            };
+            if !limits.spend(n + setup) {
                 return raised;
             }
             if subtable.cross_stream && !chained {
                 chained = true;
                 for p in pos.iter_mut() {
-                    p.hang_from_previous();
+                    p.hang(if backward { 1 } else { -1 });
                 }
             }
             let data = &self.table[..subtable.end];
-            let mut i = 0;
-            while i < info.len() {
-                let Some(j) =
-                    (i + 1..info.len()).find(|&j| info[j].class != MARK && !info[j].ignorable)
+            let mut k = 0;
+            while k < n {
+                let Some(next) =
+                    (k + 1..n).find(|&j| info[at(j)].class != MARK && !info[at(j)].ignorable)
                 else {
                     break;
                 };
+                let (i, j) = (at(k), at(next));
                 let (left, right) = (info[i].glyph, info[j].glyph);
                 let kern = match subtable.format {
                     0 => pair(data, subtable.body, left, right),
@@ -122,7 +140,7 @@ impl<'a> Kern<'a> {
                         pos[j].x_offset = pos[j].x_offset.wrapping_add(second);
                     }
                 }
-                i = j;
+                k = next;
             }
         }
         raised

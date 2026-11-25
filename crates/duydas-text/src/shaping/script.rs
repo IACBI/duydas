@@ -7,7 +7,8 @@ use crate::shaping_tables::{
     DEFAULT_IGNORABLE, SCRIPT_CODES, SCRIPT_COMMON, SCRIPT_INHERITED, SCRIPT_UNKNOWN, char_info,
 };
 
-use super::normalize::{decomposition, is_variation_selector, normalize, space_kind};
+use super::normalize::{Shaper, decomposition, is_variation_selector, normalize, space_kind};
+use crate::bidi::Direction;
 
 /// A Unicode script (the Script property, UAX #24).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,6 +49,24 @@ impl Script {
     }
 
     /// Whether this is a real script rather than Common, Inherited or Unknown.
+    /// The direction the script is written in horizontally, as HarfBuzz 10.4.0 lists it:
+    /// right to left for Arabic, Hebrew, Syriac, Thaana, N'Ko, Adlam and the other
+    /// right-to-left scripts, none for those written either way (Old Hungarian, Old Italic,
+    /// Runic, Tifinagh), and left to right for the rest, Common and Inherited included.
+    pub fn horizontal_direction(self) -> Option<Direction> {
+        const RIGHT_TO_LEFT: &[&str] = &[
+            "Arab", "Hebr", "Syrc", "Thaa", "Cprt", "Khar", "Phnx", "Nkoo", "Lydi", "Avst", "Armi",
+            "Phli", "Prti", "Sarb", "Orkh", "Samr", "Mand", "Merc", "Mero", "Mani", "Mend", "Nbat",
+            "Narb", "Palm", "Phlp", "Hatr", "Adlm", "Rohg", "Sogo", "Sogd", "Elym", "Chrs", "Yezi",
+            "Ougr", "Gara",
+        ];
+        match self.iso15924() {
+            code if RIGHT_TO_LEFT.contains(&code) => Some(Direction::RightToLeft),
+            "Hung" | "Ital" | "Runr" | "Tfng" => None,
+            _ => Some(Direction::LeftToRight),
+        }
+    }
+
     pub fn is_specific(self) -> bool {
         !matches!(self.0, SCRIPT_COMMON | SCRIPT_INHERITED | SCRIPT_UNKNOWN)
     }
@@ -252,7 +271,10 @@ pub struct Run {
 /// (default-ignorable characters and variation selectors aside; a character also counts as
 /// covered when the font has its canonical decomposition, unless a variation selector
 /// follows it, and a letter with marks when shaping composes them into a glyph the font has,
-/// such as e and U+0301 into é). A cluster of Common or Inherited
+/// such as e and U+0301 into é, or a Hebrew letter and point into a presentation form when
+/// the font does not position marks). Coverage is judged as shaping left to right in the
+/// default language with no extra features: a character is not counted as covered by its
+/// mirror image. A cluster of Common or Inherited
 /// characters, such as a space or a digit, stays with the font before it when that font
 /// covers it. A cluster no font covers goes to the first font that has its first character,
 /// so a letter keeps its font when only a mark after it is missing; failing that, it stays
@@ -286,11 +308,12 @@ pub fn itemize(text: &str, fonts: &[&Font]) -> Vec<Run> {
             .get(script_run)
             .filter(|(r, _)| r.contains(&range.start))
             .map_or(Script::COMMON, |&(_, s)| s);
-        // Coverage counts what `shape` maps for this script: Hangul jamo compose there.
-        let hangul = script.opentype_tag() == Some(*b"hang");
+        // Coverage counts what `shape` maps for this script: Hangul jamo compose there, and
+        // Hebrew points into presentation forms.
+        let tag = script.opentype_tag();
         let font = previous
-            .filter(|&f| neutral && covers(fonts[f], grapheme, hangul))
-            .or_else(|| fonts.iter().position(|f| covers(f, grapheme, hangul)))
+            .filter(|&f| neutral && covers(fonts[f], grapheme, tag))
+            .or_else(|| fonts.iter().position(|f| covers(f, grapheme, tag)))
             .or_else(|| {
                 let base = grapheme.chars().next()?;
                 fonts.iter().position(|f| f.glyph_index(base).is_some())
@@ -333,11 +356,20 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
 }
 
 /// Whether `font` can draw every character of `grapheme` that needs a glyph, one by one
-/// or as shaping maps them, composing a letter and its marks (or Hangul jamo, for Hangul
-/// text) into a glyph the font has.
-fn covers(font: &Font, grapheme: &str, hangul: bool) -> bool {
+/// or as shaping maps them in left-to-right text of the script tagged `script`, composing
+/// a letter and its marks (Hangul jamo, for Hangul; points into presentation forms, for
+/// Hebrew) into a glyph the font has. Shaping decides on presentation forms from the plan
+/// for its language and features, which `itemize` does not know: this takes the default
+/// language and features, which is what a font with a `mark` feature for every language
+/// gives.
+fn covers(font: &Font, grapheme: &str, script: Option<[u8; 4]>) -> bool {
     let mapped = || {
-        normalize(font, grapheme, hangul)
+        let shaper = match script {
+            Some(tag) if tag == *b"hang" => Shaper::Hangul,
+            Some(tag) if tag == *b"hebr" => super::hebrew_shaper(font),
+            _ => Shaper::Default,
+        };
+        normalize(font, grapheme, shaper, false, false)
             .iter()
             .all(|ch| ch.glyph != 0 || char_info(ch.c) & DEFAULT_IGNORABLE != 0)
     };

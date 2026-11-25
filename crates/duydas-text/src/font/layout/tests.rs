@@ -330,6 +330,21 @@ pub(crate) fn pair(pairs: &[(u16, u16, i16)]) -> T {
     T(fields)
 }
 
+/// A cursive attachment subtable (lookup type 3): each glyph with its entry and exit anchors.
+pub(crate) fn cursive(glyphs: &[EntryExit]) -> T {
+    let mut sorted = glyphs.to_vec();
+    sorted.sort_unstable_by_key(|g| g.0);
+    let covered: Vec<u16> = sorted.iter().map(|g| g.0).collect();
+    let mut fields = vec![W(1), O(coverage(&covered)), W(sorted.len() as u16)];
+    for (_, entry, exit) in sorted {
+        fields.extend(anchors(&[entry, exit]));
+    }
+    T(fields)
+}
+
+/// A glyph with its cursive entry and exit anchors.
+pub(crate) type EntryExit = (u16, Option<(i16, i16)>, Option<(i16, i16)>);
+
 fn mark_array(marks: &[(u16, u16, (i16, i16))]) -> T {
     let mut fields = vec![W(marks.len() as u16)];
     for &(_, class, (x, y)) in marks {
@@ -471,8 +486,8 @@ fn gpos(
         .map(|&a| Position::with_advance(a))
         .collect();
     let mut limits = Limits::new(info.len());
-    position(&tables, &lookups, info, &mut pos, &mut limits);
-    propagate_attachments(&mut pos);
+    position(&tables, &lookups, info, &mut pos, &mut limits, false);
+    propagate_attachments(&mut pos, false);
     pos.iter()
         .map(|p| (p.x_advance, p.x_offset, p.y_offset))
         .collect()
@@ -1218,4 +1233,114 @@ fn cursive_attachment_joins_exit_to_entry() {
         gpos_glyphs(&table, &[], &[1, 2], &[600, 600]),
         [(500, 0, 0), (580, -20, 100)]
     );
+}
+
+#[test]
+fn bulk_passes_need_the_whole_budget() {
+    // The smallest budget is 2^20 steps.
+    let limits = Limits::new(0);
+    assert!(limits.spend((1 << 20) - 1));
+    assert!(!limits.exhausted());
+    // One step is left: a pass of two may not start, and the budget is spent.
+    assert!(!limits.spend(2));
+    assert!(limits.exhausted());
+    assert!(!limits.spend(0));
+}
+
+/// A legacy `kern` table with one format 0 subtable kerning glyphs 1 and 2 by -80, across
+/// the line (raising the second glyph) when `cross_stream`.
+fn kern_table(cross_stream: bool) -> Vec<u8> {
+    let coverage: u16 = if cross_stream { 0x0005 } else { 0x0001 };
+    let mut table = vec![0, 0, 0, 1];
+    for v in [0, 20, coverage, 1, 6, 0, 0, 1, 2] {
+        table.extend(v.to_be_bytes());
+    }
+    table.extend((-80i16).to_be_bytes());
+    table
+}
+
+#[test]
+fn kern_passes_need_the_whole_budget() {
+    // A pass costs a step per glyph; the first cross-stream subtable also hangs every glyph.
+    for (cross_stream, cost) in [(false, 2), (true, 4)] {
+        let table = kern_table(cross_stream);
+        let kern = Kern::new(&table).expect("the kern table parses");
+        let info = buffer(&Gdef::new(&[]), &[1, 2]);
+        for left in [cost - 1, cost] {
+            let limits = Limits::new(0);
+            assert!(limits.spend((1 << 20) - left));
+            let untouched = vec![Position::with_advance(500); 2];
+            let mut pos = untouched.clone();
+            kern.apply(&info, &mut pos, &limits, false);
+            // Attachments too: a pass refused may not have hung any glyph.
+            assert_eq!(
+                pos != untouched,
+                left == cost,
+                "cross stream {cross_stream}, {left} left"
+            );
+            assert!(limits.exhausted());
+        }
+    }
+}
+
+#[test]
+fn cursive_attachment_needs_the_whole_budget() {
+    // Glyph 2 hangs from glyph 1; then a right-to-left lookup hangs it from glyph 3, which
+    // first reverses the one-link chain from 2 to 1: three walks of one step.
+    let first = || cursive(&[(1, None, Some((500, 0))), (2, Some((20, 10)), None)]);
+    let second = cursive(&[(2, None, Some((480, 0))), (3, Some((30, 40)), None)]);
+    let both = simple_table(
+        &[*b"curs", *b"curs"],
+        vec![
+            lookup(3, 0, vec![first()]),
+            lookup(3, RIGHT_TO_LEFT, vec![second]),
+        ],
+    );
+    let only_first = simple_table(&[*b"curs"], vec![lookup(3, 0, vec![first()])]);
+    let run = |table: &[u8], left: usize| {
+        let tables = Tables {
+            gpos: Some(table),
+            ..Tables::default()
+        };
+        let lookups = select(table, true, &[], None, &all_features(table)).gsub;
+        let mut info = buffer(&Gdef::default(), &[1, 2, 3]);
+        let mut pos = vec![Position::with_advance(600); 3];
+        let mut limits = Limits::new(0);
+        assert!(limits.spend((1 << 20) - left));
+        position(&tables, &lookups, &mut info, &mut pos, &mut limits, false);
+        (pos, limits.left())
+    };
+    let (all, rest) = run(&both, 1 << 20);
+    let (after_first, _) = run(&only_first, 1 << 20);
+    assert_ne!(all, after_first);
+    // The chain is reversed: glyph 1 now hangs from glyph 2, the one after it.
+    let mut reversed = all[0];
+    reversed.hang(1);
+    assert_eq!(all[0], reversed);
+    let cost = (1 << 20) - rest;
+    // The reversal is the last thing charged: with its three steps left it applies; with
+    // two, or none, the second attachment changes nothing and the budget is spent.
+    assert_eq!(run(&both, cost), (all, 0));
+    for short in [1, 3] {
+        assert_eq!(
+            run(&both, cost - short),
+            (after_first.clone(), 0),
+            "{short} short"
+        );
+    }
+}
+
+#[test]
+fn cursive_chains_are_measured_within_a_cap() {
+    // Each glyph hangs from the one before: nine links back from glyph 9 to glyph 0.
+    let mut pos = vec![Position::with_advance(500); 10];
+    for p in &mut pos[1..] {
+        p.hang(-1);
+    }
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 10, usize::MAX), Some(9));
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 10, 9), Some(9));
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 10, 8), None);
+    // The walk stops at the glyph that becomes the parent.
+    assert_eq!(gpos::cursive_chain_len(&pos, 9, 5, usize::MAX), Some(4));
+    assert_eq!(gpos::cursive_chain_len(&pos, 0, 10, 0), Some(0));
 }
