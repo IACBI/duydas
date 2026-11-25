@@ -78,8 +78,10 @@ pub(super) fn combining_class(c: char) -> u8 {
     ((char_info(c) >> 8) & 0xFF) as u8
 }
 
+/// A variation selector as normalization sees it, in HarfBuzz: the Mongolian free variation
+/// selectors are not, so they never pick a variant from `cmap` and stay default ignorables.
 pub(super) fn is_variation_selector(c: char) -> bool {
-    matches!(c, '\u{180B}'..='\u{180D}' | '\u{180F}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
 }
 
 /// A space with no glyph of its own is drawn with U+0020's glyph at the width it should
@@ -482,9 +484,15 @@ impl Output {
         self.runs.last().map(|&(_, cluster)| cluster)
     }
 
-    /// The run holding `chars[i]`.
+    /// The run holding `chars[i]`, found from the end: a merge covers at most a syllable
+    /// and a tone mark, so this looks at no more than four runs.
     fn run_of(&self, i: usize) -> usize {
-        self.runs.partition_point(|&(first, _)| first <= i) - 1
+        let mut run = self.runs.len() - 1;
+        while self.runs[run].0 > i {
+            run -= 1;
+        }
+        debug_assert!(self.runs.len() - run <= 4);
+        run
     }
 
     /// Gives everything from the start of run `run` on the cluster `cluster`.
@@ -551,7 +559,8 @@ fn merge_output(chars: &mut [Source], idx: usize, out: &mut Output, start: usize
     let run = out.run_of(start);
     // At most one run per character of the merge, a syllable and a tone mark.
     let cluster = out.runs[run..].iter().map(|&(_, c)| c).min().unwrap_or(0);
-    if let Some(last) = out.last_cluster() {
+    // Unread characters already in the merged cluster need no walk.
+    if let Some(last) = out.last_cluster().filter(|&last| last != cluster) {
         for s in chars[idx..].iter_mut().take_while(|s| s.cluster == last) {
             s.cluster = cluster;
         }
@@ -725,6 +734,7 @@ impl Mapper<'_> {
 
 /// Sorts each run of combining marks by combining class, keeping equal classes in order.
 fn reorder(chars: &mut [Char], shaper: Shaper) {
+    let mut merges = Merges::default();
     let mut i = 0;
     while i < chars.len() {
         if combining_class(chars[i].c) == 0 {
@@ -744,38 +754,110 @@ fn reorder(chars: &mut [Char], shaper: Shaper) {
                     j -= 1;
                 }
                 if j < k {
-                    merge_clusters(chars, j, k + 1);
+                    merges.merge(chars, j, k + 1);
                     chars[j..=k].rotate_right(1);
                 }
             }
             if let Shaper::Hebrew { .. } = shaper {
-                reorder_hebrew(chars, i, end);
+                reorder_hebrew(chars, &mut merges, i, end);
             }
         }
         i = end;
     }
+    merges.finish(chars);
 }
 
-/// HarfBuzz's `merge_clusters`: the characters from `start` to `end` take the smallest of
-/// their clusters, and so do the characters next to them that share the cluster of the
-/// first or last. Moving marks across a cluster boundary (a mark that starts a grapheme
-/// cluster, as at the start of the text or after a control character) merges the clusters.
-fn merge_clusters(chars: &mut [Char], mut start: usize, mut end: usize) {
-    let Some(cluster) = chars[start..end].iter().map(|ch| ch.cluster).min() else {
-        return;
-    };
-    if cluster != chars[end - 1].cluster {
-        while end < chars.len() && chars[end - 1].cluster == chars[end].cluster {
-            end += 1;
+/// HarfBuzz's `merge_clusters` during mark reordering: the characters from `start` to `end`
+/// take the smallest of their clusters, and so do the characters next to them that share
+/// the cluster of the first or last. That joins every run of one cluster the merge touches,
+/// so the runs are kept in a union-find: walking them character by character is quadratic
+/// when one cluster keeps growing (right-to-left Hangul, whose tone marks move in front of
+/// their syllables, merges each with the marks before it). Moving marks only crosses a
+/// cluster boundary when a mark starts a grapheme cluster, or after the Hangul pass, so the
+/// sets are made at the first merge that joins two clusters; [`Merges::finish`] writes the
+/// clusters back. Characters keep their place in the sets: they only move within a merge.
+#[derive(Default)]
+struct Merges {
+    /// Each character's parent, itself at a root.
+    parent: Vec<usize>,
+    /// At a root: the run's first character, one past its last, and its cluster.
+    first: Vec<usize>,
+    end: Vec<usize>,
+    cluster: Vec<usize>,
+}
+
+impl Merges {
+    fn merge(&mut self, chars: &[Char], start: usize, end: usize) {
+        if self.parent.is_empty() {
+            let first = chars[start].cluster;
+            if chars[start..end].iter().all(|ch| ch.cluster == first) {
+                return;
+            }
+            self.parent = (0..chars.len()).collect();
+            self.first = (0..chars.len()).collect();
+            self.end = (1..=chars.len()).collect();
+            self.cluster = chars.iter().map(|ch| ch.cluster).collect();
+            for i in 1..chars.len() {
+                if chars[i - 1].cluster == chars[i].cluster {
+                    let (a, b) = (self.root(i - 1), self.root(i));
+                    self.join(a, b);
+                }
+            }
+        }
+        let mut run = self.root(start);
+        while self.end[run] < end {
+            let next = self.root(self.end[run]);
+            run = self.join(run, next);
+        }
+        // HarfBuzz compares clusters, so a neighbour that now shares the cluster is one run
+        // with it.
+        let cluster = self.cluster[run];
+        if self.first[run] > 0 {
+            let left = self.root(self.first[run] - 1);
+            if self.cluster[left] == cluster {
+                run = self.join(left, run);
+            }
+        }
+        if self.end[run] < self.parent.len() {
+            let right = self.root(self.end[run]);
+            if self.cluster[right] == cluster {
+                self.join(run, right);
+            }
         }
     }
-    if cluster != chars[start].cluster {
-        while start > 0 && chars[start - 1].cluster == chars[start].cluster {
-            start -= 1;
+
+    fn root(&mut self, mut i: usize) -> usize {
+        while self.parent[i] != i {
+            self.parent[i] = self.parent[self.parent[i]];
+            i = self.parent[i];
         }
+        i
     }
-    for ch in &mut chars[start..end] {
-        ch.cluster = cluster;
+
+    /// Joins run `a` and run `b` right after it, under the larger; returns the new root.
+    fn join(&mut self, a: usize, b: usize) -> usize {
+        let (first, end) = (self.first[a], self.end[b]);
+        let cluster = self.cluster[a].min(self.cluster[b]);
+        let (root, child) = if self.end[a] - self.first[a] >= self.end[b] - self.first[b] {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        self.parent[child] = root;
+        self.first[root] = first;
+        self.end[root] = end;
+        self.cluster[root] = cluster;
+        root
+    }
+
+    fn finish(mut self, chars: &mut [Char]) {
+        if self.parent.is_empty() {
+            return;
+        }
+        for (i, ch) in chars.iter_mut().enumerate() {
+            let root = self.root(i);
+            ch.cluster = self.cluster[root];
+        }
     }
 }
 
@@ -784,7 +866,7 @@ fn merge_clusters(chars: &mut [Char], mut start: usize, mut end: usize) {
 /// run of marks, `chars[start..end]`, moves; their clusters merge first, since a mark can
 /// start a cluster (at the start of the text, or after a control character). The classes
 /// are HarfBuzz's (see `char_info`).
-fn reorder_hebrew(chars: &mut [Char], start: usize, end: usize) {
+fn reorder_hebrew(chars: &mut [Char], merges: &mut Merges, start: usize, end: usize) {
     const PATAH: u8 = 20;
     const QAMATS: u8 = 21;
     const SHEVA: u8 = 22;
@@ -797,7 +879,7 @@ fn reorder_hebrew(chars: &mut [Char], start: usize, end: usize) {
             && matches!(class(i - 1), SHEVA | HIRIQ)
             && matches!(class(i), METEG | BELOW)
         {
-            merge_clusters(chars, i - 1, i + 1);
+            merges.merge(chars, i - 1, i + 1);
             chars.swap(i - 1, i);
             break;
         }

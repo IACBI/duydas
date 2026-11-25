@@ -192,24 +192,38 @@ fn u24(v: u32) -> [u8; 3] {
 
 /// Format 14 with one selector: default ranges and glyph mappings.
 pub(crate) fn format14(selector: u32, defaults: &[(u32, u8)], mappings: &[(u32, u16)]) -> Vec<u8> {
-    let default_at = 10 + 11;
-    let default_len = 4 + 4 * defaults.len();
-    let mapping_at = default_at + default_len;
-    let total = mapping_at + 4 + 5 * mappings.len();
+    format14_records(&[(selector, defaults, mappings)])
+}
+
+/// A variation selector record: the selector, its default ranges (start, additional count)
+/// and its mappings to glyphs.
+pub(crate) type SelectorRecord<'a> = (u32, &'a [(u32, u8)], &'a [(u32, u16)]);
+
+/// A format 14 subtable with one record per selector, in the order given.
+pub(crate) fn format14_records(records: &[SelectorRecord<'_>]) -> Vec<u8> {
+    let mut at = 10 + 11 * records.len();
+    let (mut header, mut tables) = (Vec::new(), Vec::new());
+    for &(selector, defaults, mappings) in records {
+        let default_at = at;
+        let mapping_at = default_at + 4 + 4 * defaults.len();
+        at = mapping_at + 4 + 5 * mappings.len();
+        header.extend(u24(selector));
+        header.extend(u32s(&[default_at as u32, mapping_at as u32]));
+        tables.extend(u32s(&[defaults.len() as u32]));
+        for &(start, extra) in defaults {
+            tables.extend(u24(start));
+            tables.push(extra);
+        }
+        tables.extend(u32s(&[mappings.len() as u32]));
+        for &(code, glyph) in mappings {
+            tables.extend(u24(code));
+            tables.extend(glyph.to_be_bytes());
+        }
+    }
     let mut out = u16s(&[14]);
-    out.extend(u32s(&[total as u32, 1]));
-    out.extend(u24(selector));
-    out.extend(u32s(&[default_at as u32, mapping_at as u32]));
-    out.extend(u32s(&[defaults.len() as u32]));
-    for &(start, extra) in defaults {
-        out.extend(u24(start));
-        out.push(extra);
-    }
-    out.extend(u32s(&[mappings.len() as u32]));
-    for &(code, glyph) in mappings {
-        out.extend(u24(code));
-        out.extend(glyph.to_be_bytes());
-    }
+    out.extend(u32s(&[at as u32, records.len() as u32]));
+    out.extend(header);
+    out.extend(tables);
     out
 }
 

@@ -10,7 +10,7 @@ use crate::font::layout::tests::{
     mark_to_ligature, multiple, pair, simple_table, single,
 };
 use crate::font::tests::{
-    cmap_table, collect, font_dirs, format12, format14, simple_glyph, tt_font,
+    cmap_table, collect, font_dirs, format12, format14, format14_records, simple_glyph, tt_font,
 };
 
 // Glyphs of the test font.
@@ -1760,6 +1760,8 @@ const V_NA: u16 = 15;
 const V_NAK: u16 = 16;
 const V_TONE: u16 = 17;
 const V_CIRCLE: u16 = 18;
+const V_CIRCLE_FVS: u16 = 12;
+const V_CIRCLE_VS16: u16 = 13;
 const V_LIGATURE: u16 = 19;
 
 /// A font for corners of HarfBuzz's behaviour found in review: `rtlm` alternates for a
@@ -1767,30 +1769,39 @@ const V_LIGATURE: u16 = 19;
 /// four bits of a component are kept) and no GPOS, so marks fall back to the glyphs' boxes,
 /// the Angstrom sign and the letter it decomposes to, an emoji and a star (pictographic in
 /// HarfBuzz's emoji data, not in Unicode 18's), jamo, two syllables, a tone mark and a
-/// dotted circle.
+/// dotted circle, with variants for two selectors.
 fn review_font_data() -> Vec<u8> {
-    let cmap = cmap_table(&[(
-        3,
-        10,
-        format12(&[
-            (0x20, 0x20, 1),
-            (0x5B, 0x5B, u32::from(V_BRACKET)),
-            (0x61, 0x61, u32::from(V_A)),
-            (0xC5, 0xC5, u32::from(V_A_RING)),
-            (0x301, 0x301, u32::from(V_ACUTE)),
-            (0x308, 0x308, u32::from(V_DIAERESIS)),
-            (0x5D0, 0x5D0, u32::from(V_ALEF)),
-            (0x1100, 0x1100, 10),
-            (0x1161, 0x1161, 11),
-            (0x11A8, 0x11A8, 14),
-            (0x212B, 0x212B, u32::from(V_ANGSTROM)),
-            (0x25CC, 0x25CC, u32::from(V_CIRCLE)),
-            (0x2605, 0x2605, u32::from(V_GRIN)),
-            (0x302E, 0x302E, u32::from(V_TONE)),
-            (0xB098, 0xB099, u32::from(V_NA)),
-            (0x1F600, 0x1F600, u32::from(V_GRIN)),
-        ]),
-    )]);
+    // The dotted circle has variants for VS16 and for a Mongolian free variation selector,
+    // which HarfBuzz's normalization does not treat as a selector.
+    let selectors = format14_records(&[
+        (0x180B, &[], &[(0x25CC, V_CIRCLE_FVS)]),
+        (0xFE0F, &[], &[(0x25CC, V_CIRCLE_VS16)]),
+    ]);
+    let cmap = cmap_table(&[
+        (0, 5, selectors),
+        (
+            3,
+            10,
+            format12(&[
+                (0x20, 0x20, 1),
+                (0x5B, 0x5B, u32::from(V_BRACKET)),
+                (0x61, 0x61, u32::from(V_A)),
+                (0xC5, 0xC5, u32::from(V_A_RING)),
+                (0x301, 0x301, u32::from(V_ACUTE)),
+                (0x308, 0x308, u32::from(V_DIAERESIS)),
+                (0x5D0, 0x5D0, u32::from(V_ALEF)),
+                (0x1100, 0x1100, 10),
+                (0x1161, 0x1161, 11),
+                (0x11A8, 0x11A8, 14),
+                (0x212B, 0x212B, u32::from(V_ANGSTROM)),
+                (0x25CC, 0x25CC, u32::from(V_CIRCLE)),
+                (0x2605, 0x2605, u32::from(V_GRIN)),
+                (0x302E, 0x302E, u32::from(V_TONE)),
+                (0xB098, 0xB099, u32::from(V_NA)),
+                (0x1F600, 0x1F600, u32::from(V_GRIN)),
+            ]),
+        ),
+    ]);
     let classes: Vec<(u16, u16)> = (1..20)
         .map(|g| match g {
             V_ACUTE | V_DIAERESIS => (g, 3),
@@ -1966,9 +1977,14 @@ fn review_cases_shape_like_harfbuzz() {
     );
     // A tone mark with no syllable before it gets a dotted circle that keeps the mark's
     // combining class, so the acute before them sorts after both. The circle is still
-    // looked up as U+25CC, also with a variation selector after it.
+    // looked up as U+25CC, also for its variant with a variation selector; a Mongolian free
+    // variation selector is not one to HarfBuzz's normalization, and is hidden.
     assert_eq!(
         shaped("\u{302E}\u{FE0F}", '\u{B098}', &[], Ltr),
+        [(V_TONE, 0, 500, 0, 0), (V_CIRCLE_VS16, 0, 500, 0, 0)]
+    );
+    assert_eq!(
+        shaped("\u{302E}\u{180B}", '\u{B098}', &[], Ltr),
         [
             (V_TONE, 0, 500, 0, 0),
             (V_CIRCLE, 0, 500, 0, 0),
@@ -1986,10 +2002,13 @@ fn review_cases_shape_like_harfbuzz() {
     );
 }
 
-/// Right to left, each pair of jamo HarfBuzz forms joins two graphemes, so the clusters
-/// merge into one (HarfBuzz keeps a cluster per pair, splitting graphemes), in linear time.
+/// Hangul's cluster merges take linear time. Right to left, each pair of jamo HarfBuzz forms
+/// joins two graphemes, so the clusters merge into one (HarfBuzz keeps a cluster per pair,
+/// splitting graphemes); each tone mark moved in front of its syllable sorts before the
+/// marks of the one before, merging them as HarfBuzz does; and decomposed syllables leave
+/// many clusters in the output.
 #[test]
-fn right_to_left_jamo_merge_in_linear_time() {
+fn hangul_merges_take_linear_time() {
     let font = Font::from_data(review_font_data(), 0).expect("the font parses");
     let options = ShapeOptions {
         script: Script::of('\u{B098}'),
@@ -1999,10 +2018,26 @@ fn right_to_left_jamo_merge_in_linear_time() {
     let glyphs = run(&font, &"\u{1100}\u{1161}".repeat(2), &options);
     assert_eq!(ids(&glyphs), [11, 10, 11, 10]);
     assert_eq!(clusters(&glyphs), [0, 0, 0, 0]);
+    let glyphs = run(&font, &"\u{B098}\u{302E}\u{301}".repeat(2), &options);
+    assert_eq!(ids(&glyphs), [V_TONE, V_NA, V_TONE, V_ACUTE, V_NA, V_ACUTE]);
+    assert_eq!(clusters(&glyphs), [0; 6]);
+    let ltr = ShapeOptions {
+        direction: Direction::LeftToRight,
+        ..options
+    };
+    let glyphs = run(&font, &"\u{AC00}".repeat(2), &ltr);
+    assert_eq!(ids(&glyphs), [10, 11, 10, 11]);
+    assert_eq!(clusters(&glyphs), [0, 0, 3, 3]);
+
     let started = std::time::Instant::now();
     let glyphs = run(&font, &"\u{1100}\u{1161}".repeat(200_000), &options);
     assert_eq!(glyphs.len(), 400_000);
     assert!(glyphs.iter().all(|g| g.cluster == 0));
+    let glyphs = run(&font, &"\u{B098}\u{302E}\u{301}".repeat(100_000), &options);
+    assert_eq!(glyphs.len(), 300_000);
+    assert!(glyphs.iter().all(|g| g.cluster == 0));
+    let glyphs = run(&font, &"\u{AC00}".repeat(200_000), &ltr);
+    assert_eq!(glyphs.len(), 400_000);
     assert!(started.elapsed() < std::time::Duration::from_secs(30));
 }
 
