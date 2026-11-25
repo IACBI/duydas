@@ -79,7 +79,8 @@ pub(super) fn combining_class(c: char) -> u8 {
 }
 
 /// A variation selector as normalization sees it, in HarfBuzz: the Mongolian free variation
-/// selectors are not, so they never pick a variant from `cmap` and stay default ignorables.
+/// selectors are not, so they never pick a variant from `cmap`. U+180B to U+180D are default
+/// ignorables, hidden; U+180F, newer than HarfBuzz's list of them, is drawn as a mark.
 pub(super) fn is_variation_selector(c: char) -> bool {
     matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
 }

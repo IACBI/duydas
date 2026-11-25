@@ -2071,6 +2071,56 @@ fn itemizing_hebrew_counts_presentation_forms() {
     assert_eq!(itemize("\u{5D0}", &fonts)[0].font, 0);
 }
 
+/// A font with `a` and a variant of it for VS1 and for two Mongolian free variation
+/// selectors, and a glyph of its own for U+180F when `with_fvs4`.
+fn selector_font_data(with_fvs4: bool) -> Vec<u8> {
+    let mut ranges = vec![(0x20, 0x20, 1), (0x61, 0x61, 2)];
+    if with_fvs4 {
+        ranges.push((0x180F, 0x180F, 4));
+    }
+    let variant: &[(u32, u16)] = &[(0x61, 3)];
+    let selectors = format14_records(&[
+        (0x180B, &[], variant),
+        (0x180F, &[], variant),
+        (0xFE00, &[], variant),
+    ]);
+    let cmap = cmap_table(&[(0, 5, selectors), (3, 10, format12(&ranges))]);
+    tt_font(
+        &vec![Vec::new(); 5],
+        &[(500, 0), (250, 0), (500, 0), (600, 0), (300, 0)],
+        &[(b"cmap", cmap)],
+    )
+}
+
+/// HarfBuzz's normalization takes only VS1 to VS256 as variation selectors: the Mongolian
+/// free variation selectors pick no variant. U+180B to U+180D are default ignorables and
+/// hidden; U+180F, which HarfBuzz draws, needs a glyph, also for font fallback.
+#[test]
+fn mongolian_free_variation_selectors_pick_no_variant() {
+    let with = Font::from_data(selector_font_data(true), 0).expect("the font parses");
+    let without = Font::from_data(selector_font_data(false), 0).expect("the font parses");
+    let shaped = |font: &Font, text: &str| -> Vec<(u16, i32, i32)> {
+        run(font, text, &latin())
+            .iter()
+            .map(|g| (g.glyph.0, g.x_advance, g.x_offset))
+            .collect()
+    };
+    assert_eq!(shaped(&with, "a\u{FE00}"), [(3, 600, 0)]);
+    for fvs in ['\u{180B}', '\u{180C}', '\u{180D}'] {
+        assert_eq!(
+            shaped(&with, &format!("a{fvs}")),
+            [(2, 500, 0), (1, 0, 0)],
+            "{fvs:?}"
+        );
+    }
+    // U+180F is a mark: no advance, and placed over the letter without GPOS.
+    assert_eq!(shaped(&with, "a\u{180F}"), [(2, 500, 0), (4, 0, -300)]);
+    assert_eq!(shaped(&without, "a\u{180F}"), [(2, 500, 0), (0, 0, -500)]);
+    let fonts = [&without, &with];
+    assert_eq!(itemize("a\u{180F}", &fonts)[0].font, 1);
+    assert_eq!(itemize("a\u{180B}", &fonts)[0].font, 0);
+}
+
 /// Writes the fixture fonts into the directory named by DUYDAS_FIXTURE_DIR, to check the
 /// expectations above against another shaper.
 #[test]
@@ -2091,6 +2141,8 @@ fn write_fixtures_for_comparison() {
         ("joiner.ttf", joiner_font_data()),
         ("rtl.ttf", rtl_font_data()),
         ("review.ttf", review_font_data()),
+        ("selectors.ttf", selector_font_data(true)),
+        ("selectors-no-fvs4.ttf", selector_font_data(false)),
         ("hebrew.ttf", old_hebrew_font_data(false, false)),
         ("hebrew-cross.ttf", old_hebrew_font_data(true, false)),
         ("hebrew-latin-marks.ttf", old_hebrew_font_data(false, true)),
