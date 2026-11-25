@@ -18,12 +18,16 @@
 //!
 //! Bidirectional text (ADR 0028): [`bidi`] resolves embedding levels and display order with
 //! the Unicode Bidirectional Algorithm (UAX #9).
+//!
+//! Paragraph layout (ADR 0029): [`layout`] breaks shaped text into lines, reorders and places
+//! them, and finds the caret, hit-test positions and selection over them.
 
 pub mod bidi;
 #[rustfmt::skip]
 mod bidi_tables;
 pub mod font;
 mod grapheme;
+pub mod layout;
 mod line;
 mod props;
 pub mod shaping;

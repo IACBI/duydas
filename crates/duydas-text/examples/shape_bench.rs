@@ -1,11 +1,12 @@
-//! Shaping and font fallback timings.
+//! Shaping, font fallback and layout timings.
 //!
 //! ```text
 //! cargo run --release -p duydas-text --example shape_bench -- [FONT[:INDEX] ...]
 //! ```
 //!
 //! Without fonts it uses Segoe UI, Yu Gothic and, if Acrobat is installed, Minion Pro (CFF).
-//! Each message is itemized over the fonts in order, then each run is shaped.
+//! Each message is itemized over the fonts in order, then each run is shaped. Layout shapes
+//! the messages as paragraphs over the fonts, then breaks them into lines at two widths.
 
 #![allow(clippy::print_stdout, reason = "benchmark output")]
 
@@ -14,6 +15,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use duydas_text::font::Font;
+use duydas_text::layout::{Align, ShapedText, TextOptions};
 use duydas_text::shaping::{Language, Script, ShapeOptions, itemize, shape};
 
 /// Chat messages: Turkish with its dotted and dotless i, Japanese with kana and kanji, English
@@ -121,6 +123,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total * 1e6,
         total * 1e9 / chars as f64
     );
+
+    // Paragraph layout: shaping for layout, then line breaking at a narrow and a wide column.
+    let options = TextOptions {
+        size: 15.0,
+        ..TextOptions::default()
+    };
+    for (language, text) in MESSAGES.iter().copied().chain([("mixed", mixed.as_str())]) {
+        let chars = text.chars().count();
+        let (shape_time, shaped) = time(|| ShapedText::new(text, &refs, &options));
+        let mut line = format!(
+            "layout {language:>5} {chars:>3} chars: shape {:>6.1} µs ({:>4.0} ns/char)",
+            shape_time * 1e6,
+            shape_time * 1e9 / chars as f64
+        );
+        for width in [240.0, 640.0] {
+            let (layout_time, lines) =
+                time(|| shaped.layout(Some(width), Align::Start).lines().len());
+            line += &format!(
+                "; {width} px: {lines} lines in {:>5.1} µs ({:>3.0} ns/char)",
+                layout_time * 1e6,
+                layout_time * 1e9 / chars as f64
+            );
+        }
+        println!("{line}");
+    }
     Ok(())
 }
 

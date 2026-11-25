@@ -158,6 +158,45 @@ impl<'a> Bidi<'a> {
     /// end of the line, take the paragraph level. `line` is clamped to the text and to
     /// character boundaries; a line that spans paragraphs is resolved per paragraph.
     pub fn line_levels(&self, line: Range<usize>) -> Vec<u8> {
+        self.lines().line_levels(line)
+    }
+
+    /// A line's runs of one embedding level, in the order they are displayed from left to
+    /// right (rules L1 and L2). Each run's bytes are in logical order: a right-to-left run is
+    /// displayed from its end to its start.
+    pub fn visual_runs(&self, line: Range<usize>) -> Vec<VisualRun> {
+        self.lines().visual_runs(line)
+    }
+
+    /// The paragraphs and levels, for a layout that keeps them past the text's borrow.
+    pub(crate) fn into_parts(self) -> (Vec<Paragraph>, Vec<u8>) {
+        (self.paragraphs, self.levels)
+    }
+
+    fn lines(&self) -> Lines<'_> {
+        Lines {
+            text: self.text,
+            paragraphs: &self.paragraphs,
+            levels: &self.levels,
+        }
+    }
+}
+
+/// The line functions of [`Bidi`] over borrowed parts, so that a layout can keep the
+/// paragraphs and levels with its own copy of the text.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lines<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) paragraphs: &'a [Paragraph],
+    pub(crate) levels: &'a [u8],
+}
+
+impl<'a> Lines<'a> {
+    /// The embedding level of each byte of a line, with rule L1 applied: segment and paragraph
+    /// separators, and the whitespace and isolate formatting characters before them or at the
+    /// end of the line, take the paragraph level. `line` is clamped to the text and to
+    /// character boundaries; a line that spans paragraphs is resolved per paragraph.
+    pub(crate) fn line_levels(&self, line: Range<usize>) -> Vec<u8> {
         let line = self.clamp(line);
         let mut levels = self.levels[line.clone()].to_vec();
         let mut reset = Vec::new();
@@ -203,7 +242,7 @@ impl<'a> Bidi<'a> {
     /// A line's runs of one embedding level, in the order they are displayed from left to
     /// right (rules L1 and L2). Each run's bytes are in logical order: a right-to-left run is
     /// displayed from its end to its start.
-    pub fn visual_runs(&self, line: Range<usize>) -> Vec<VisualRun> {
+    pub(crate) fn visual_runs(&self, line: Range<usize>) -> Vec<VisualRun> {
         let line = self.clamp(line);
         let levels = self.line_levels(line.clone());
         let mut out = Vec::new();
@@ -237,15 +276,16 @@ impl<'a> Bidi<'a> {
     /// The paragraphs a clamped line overlaps, each with the line's bytes in it. A binary
     /// search finds the first, so a call costs the line's length plus the logarithm of the
     /// number of paragraphs.
-    fn parts<'s>(
-        &'s self,
+    fn parts(
+        &self,
         line: &Range<usize>,
-    ) -> impl Iterator<Item = (&'s Paragraph, Range<usize>)> + 's {
+    ) -> impl Iterator<Item = (&'a Paragraph, Range<usize>)> + 'a {
         let line = line.clone();
         let first = self
             .paragraphs
             .partition_point(|p| p.range.end <= line.start);
-        self.paragraphs[first..]
+        let paragraphs: &'a [Paragraph] = self.paragraphs;
+        paragraphs[first..]
             .iter()
             .take_while(move |p| p.range.start < line.end)
             .map(move |p| {
