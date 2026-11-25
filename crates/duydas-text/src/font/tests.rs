@@ -88,7 +88,7 @@ fn head(units_per_em: u16, long_loca: bool) -> Vec<u8> {
     t
 }
 
-fn hhea(ascender: i16, descender: i16, line_gap: i16, long_metrics: u16) -> Vec<u8> {
+pub(crate) fn hhea(ascender: i16, descender: i16, line_gap: i16, long_metrics: u16) -> Vec<u8> {
     let mut t = vec![0u8; 36];
     t[..4].copy_from_slice(&[0, 1, 0, 0]);
     t[4..6].copy_from_slice(&ascender.to_be_bytes());

@@ -274,7 +274,7 @@ pub struct Run {
 /// such as e and U+0301 into é, or a Hebrew letter and point into a presentation form when
 /// the font does not position marks). Coverage is judged as shaping left to right in the
 /// default language with no extra features: a character is not counted as covered by its
-/// mirror image. A cluster of Common or Inherited
+/// mirror image ([`itemize_with`] takes the direction). A cluster of Common or Inherited
 /// characters, such as a space or a digit, stays with the font before it when that font
 /// covers it. A cluster no font covers goes to the first font that has its first character,
 /// so a letter keeps its font when only a mark after it is missing; failing that, it stays
@@ -285,6 +285,14 @@ pub struct Run {
 ///
 /// Returns no runs when `fonts` is empty.
 pub fn itemize(text: &str, fonts: &[&Font]) -> Vec<Run> {
+    itemize_with(text, fonts, Direction::LeftToRight)
+}
+
+/// [`itemize`] for text of one direction, such as a run of one embedding level (see
+/// [`crate::bidi`]). Right to left, a character also counts as covered by a font that has
+/// its mirror image, which shaping draws in its place.
+pub fn itemize_with(text: &str, fonts: &[&Font], direction: Direction) -> Vec<Run> {
+    let rtl = direction == Direction::RightToLeft;
     let mut runs: Vec<Run> = Vec::new();
     if fonts.is_empty() {
         return runs;
@@ -312,11 +320,11 @@ pub fn itemize(text: &str, fonts: &[&Font]) -> Vec<Run> {
         // Hebrew points into presentation forms.
         let tag = script.opentype_tag();
         let font = previous
-            .filter(|&f| neutral && covers(fonts[f], grapheme, tag))
-            .or_else(|| fonts.iter().position(|f| covers(f, grapheme, tag)))
+            .filter(|&f| neutral && covers(fonts[f], grapheme, tag, rtl))
+            .or_else(|| fonts.iter().position(|f| covers(f, grapheme, tag, rtl)))
             .or_else(|| {
                 let base = grapheme.chars().next()?;
-                fonts.iter().position(|f| f.glyph_index(base).is_some())
+                fonts.iter().position(|f| has_char(f, base, rtl))
             })
             .or(previous)
             .unwrap_or(0);
@@ -356,20 +364,21 @@ fn resolve_scripts(text: &str) -> Vec<(Range<usize>, Script)> {
 }
 
 /// Whether `font` can draw every character of `grapheme` that needs a glyph, one by one
-/// or as shaping maps them in left-to-right text of the script tagged `script`, composing
+/// or as shaping maps them in text of the script tagged `script` (right to left, with the
+/// mirror images shaping draws, if `rtl`), composing
 /// a letter and its marks (Hangul jamo, for Hangul; points into presentation forms, for
 /// Hebrew) into a glyph the font has. Shaping decides on presentation forms from the plan
 /// for its language and features, which `itemize` does not know: this takes the default
 /// language and features, which is what a font with a `mark` feature for every language
 /// gives.
-fn covers(font: &Font, grapheme: &str, script: Option<[u8; 4]>) -> bool {
+fn covers(font: &Font, grapheme: &str, script: Option<[u8; 4]>, rtl: bool) -> bool {
     let mapped = || {
         let shaper = match script {
             Some(tag) if tag == *b"hang" => Shaper::Hangul,
             Some(tag) if tag == *b"hebr" => super::hebrew_shaper(font),
             _ => Shaper::Default,
         };
-        normalize(font, grapheme, shaper, false, false)
+        normalize(font, grapheme, shaper, rtl, false)
             .iter()
             .all(|ch| ch.glyph != 0 || char_info(ch.c) & DEFAULT_IGNORABLE != 0)
     };
@@ -378,10 +387,35 @@ fn covers(font: &Font, grapheme: &str, script: Option<[u8; 4]>) -> bool {
     if grapheme.chars().any(is_variation_selector) {
         return mapped();
     }
-    covers_each(font, grapheme) || mapped()
+    covers_each(font, grapheme, rtl) || !maps_as_itself(grapheme) && mapped()
 }
 
-fn covers_each(font: &Font, grapheme: &str) -> bool {
+/// Whether shaping maps `grapheme` only to what [`covers_each`] checks: a lone character
+/// with no decomposition, outside Hangul (whose shaper composes and decomposes) and other
+/// than U+2011 (which can take the hyphen's glyph). For most text a font lacks, this spares
+/// the normalization.
+fn maps_as_itself(grapheme: &str) -> bool {
+    let mut chars = grapheme.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return false;
+    };
+    let hangul = matches!(
+        c,
+        '\u{1100}'..='\u{11FF}'
+            | '\u{3130}'..='\u{318F}'
+            | '\u{A960}'..='\u{A97F}'
+            | '\u{AC00}'..='\u{D7FF}'
+    );
+    !hangul && c != '\u{2011}' && decomposition(c).is_none()
+}
+
+/// Whether `font` has `c` or, right to left, its mirror image.
+fn has_char(font: &Font, c: char, rtl: bool) -> bool {
+    font.glyph_index(c).is_some()
+        || rtl && crate::bidi::mirror(c).is_some_and(|m| font.glyph_index(m).is_some())
+}
+
+fn covers_each(font: &Font, grapheme: &str, rtl: bool) -> bool {
     let mut chars = grapheme.chars().peekable();
     while let Some(c) = chars.next() {
         if let Some(&selector) = chars.peek()
@@ -394,7 +428,7 @@ fn covers_each(font: &Font, grapheme: &str) -> bool {
         if char_info(c) & DEFAULT_IGNORABLE != 0 {
             continue;
         }
-        if !covers_char(font, c, 0) {
+        if !(covers_char(font, c, 0) || rtl && has_char(font, c, true)) {
             return false;
         }
     }

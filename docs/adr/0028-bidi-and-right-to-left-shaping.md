@@ -1,6 +1,6 @@
 # 0028. Bidirectional text and right-to-left shaping
 
-- Status: Accepted
+- Status: Accepted; font fallback by direction added by ADR 0029
 - Date: 2026-11-25
 
 ## Context
@@ -85,7 +85,7 @@ Codex (`gpt-6.2-sol`, read-only, high effort) reviewed the pull request. It foun
   - a run's first reservation was sized by bytes;
   - wording in docs, the sample headers and the workflow's paths;
   - a fraction test that could not tell the forms apart.
-- **Deferred:** fallback by direction for mirrored characters, to paragraph layout (ADR 0029), where runs have a direction.
+- **Deferred:** fallback by direction for mirrored characters, to paragraph layout (ADR 0029), where runs have a direction. Done there, as `itemize_with`.
 
 A second pass over the fixes found 3 medium and 4 low issues, all fixed:
 

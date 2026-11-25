@@ -31,4 +31,5 @@ Each ADR records one decision: context, decision, consequences. Copy [`template.
 | [0025](0025-text-segmentation.md) | In-house Unicode text segmentation | Accepted |
 | [0026](0026-font-parsing-and-rasterization.md) | In-house OpenType parsing and glyph rasterization | Accepted |
 | [0027](0027-text-shaping-and-font-fallback.md) | In-house text shaping and font fallback | Accepted; right-to-left text added by 0028 |
-| [0028](0028-bidi-and-right-to-left-shaping.md) | In-house bidirectional text and right-to-left shaping | Accepted |
+| [0028](0028-bidi-and-right-to-left-shaping.md) | In-house bidirectional text and right-to-left shaping | Accepted; font fallback by direction added by 0029 |
+| [0029](0029-paragraph-layout.md) | In-house paragraph layout: line breaking, reordering, caret and selection | Accepted |

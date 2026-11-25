@@ -47,7 +47,7 @@ use crate::shaping_tables::{
     DECIMAL_NUMBER, DEFAULT_IGNORABLE, LETTER, MARK, NONSPACING_MARK, char_info,
 };
 
-pub use script::{Language, Run, Script, itemize};
+pub use script::{Language, Run, Script, itemize, itemize_with};
 
 use normalize::{SPACE, SPACE_4_EM_18, SPACE_FIGURE, SPACE_NARROW, SPACE_PUNCTUATION, Shaper};
 

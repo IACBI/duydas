@@ -137,3 +137,17 @@ Parsing a face takes 1–13 µs. Once glyphs are cached (the cache is still to c
 | Minion Pro (CFF) | 202–442 ns | 1.1–1.7 µs |
 
 The mixed message, 284 characters in 14 runs, is itemized in 16–27 µs and itemized and shaped in 87–140 µs. From these numbers, shaping a screen of 50 messages of 100 characters would take an estimated 2.5 ms the first time; layout, which will cache shaped runs, comes next. Details: [ADR 0027](adr/0027-text-shaping-and-font-fallback.md).
+
+## Baseline: paragraph layout (2026-11-25)
+
+`cargo run --release -p duydas-text --example shape_bench` also lays out each message as a paragraph over Segoe UI, Yu Gothic and Minion Pro. It builds `ShapedText::new` once, then lays it out at 240 px and at 640 px. Same machine as above, ranges over five runs (one run was about twice as slow as the others):
+
+| Message | `ShapedText::new` | Layout at 240 px | Layout at 640 px |
+|---|---|---|---|
+| Turkish, 90 characters | 40–72 µs | 3 lines, 39–92 µs | 1 line, 8.7–20 µs |
+| Japanese, 41 characters | 35–70 µs | 3 lines, 19–40 µs | 1 line, 6.5–17 µs |
+| English, 84 characters | 37–71 µs | 3 lines, 34–75 µs | 1 line, 8.0–17 µs |
+| Decomposed marks, 66 characters | 27–43 µs | 2 lines, 26–43 µs | 1 line, 6.6–13 µs |
+| Mixed, 284 characters | 121–289 µs | 10 lines, 119–176 µs | 4 lines, 69–89 µs |
+
+Per character, `ShapedText::new` takes 412–845 ns for the Turkish and English messages, 857–1,716 ns for the Japanese one and 426–1,018 ns for the mixed one. A layout at 240 px, where every message wraps, takes 400–1,019 ns; one at 640 px, where the short messages fit on one line, 95–410 ns. A wrapped line costs about as much as shaping it again, because the runs its breaks cut are shaped again. From these numbers, a screen of 50 messages of 100 characters would take an estimated 2.1–8.6 ms to shape the first time (2.1–4.2 ms for Latin text, Japanese at the top end), and 2.0–5.1 ms to lay out again at a new width where the messages wrap. Details: [ADR 0029](adr/0029-paragraph-layout.md).
